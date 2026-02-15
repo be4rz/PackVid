@@ -18,7 +18,7 @@ import {
   AlertTriangle, Trash2, Play,
   Info, ShieldAlert, RotateCcw,
   Truck, QrCode, History,
-  Circle, Square, X,
+  Circle, Square, X, Timer,
 } from 'lucide-react'
 import { ProductList } from '../modules/_example/presentation/components/ProductList'
 import { CameraFeed } from '../shared/components/CameraFeed'
@@ -65,9 +65,12 @@ export function RecordingView() {
   // ─── QR Scanner ─────────────────────────────────────────────
   const scannerVideoRef = useRef<HTMLVideoElement | null>(null)
 
-  // Beep on each new scan
-  const handleScan = useCallback(() => {
+  // Use ref for auto-trigger to break circular dependency between hooks
+  const autoTriggerRef = useRef<((order: ScannedOrder) => void) | null>(null)
+
+  const handleScan = useCallback((order: ScannedOrder) => {
     playBeep()
+    autoTriggerRef.current?.(order)
   }, [])
 
   const { lastScan, isScanning, scanCount, scanHistory, reset: resetScanner } = useQRScanner(
@@ -85,32 +88,166 @@ export function RecordingView() {
     cancelRecording,
   } = useRecorder(isSingleCamera ? scannerStream : recorderStream)
 
-  // Handlers that catch errors and log them
-  const handleStartRecording = useCallback(async () => {
-    if (!lastScan) return
+  // Track which tracking number is currently being recorded
+  const currentTrackingRef = useRef<string | null>(null)
+
+  // ─── Duplicate & Cancel dialogs ───────────────────────────
+  const [duplicateDialog, setDuplicateDialog] = useState<{
+    trackingNumber: string
+    carrier?: string
+    existingId: string
+    existingFileKey: string
+  } | null>(null)
+
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+
+  // ─── Max duration auto-stop ────────────────────────────────
+  const [maxDurationSeconds, setMaxDurationSeconds] = useState(600)
+  const [showMaxDurationToast, setShowMaxDurationToast] = useState(false)
+
+  // Load max duration from settings on mount
+  useEffect(() => {
+    window.api.settings.get('max_recording_seconds').then((val: unknown) => {
+      if (typeof val === 'number' && val > 0) setMaxDurationSeconds(val)
+    })
+  }, [])
+
+  // Auto-stop when max duration reached
+  useEffect(() => {
+    if (!isRecording || recordingDuration < maxDurationSeconds) return
+
+    const autoStop = async () => {
+      try {
+        const summary = await stopRecording()
+        console.log('[RecordingView] Auto-stopped at max duration:', summary)
+        currentTrackingRef.current = null
+        setShowMaxDurationToast(true)
+        setTimeout(() => setShowMaxDurationToast(false), 4000)
+      } catch (err) {
+        console.error('[RecordingView] Auto-stop failed:', err)
+      }
+    }
+    autoStop()
+  }, [isRecording, recordingDuration, maxDurationSeconds, stopRecording])
+
+  // ─── Core recording actions ────────────────────────────────
+
+  /** Start recording for a given order (handles duplicate check internally) */
+  const doStartRecording = useCallback(async (trackingNumber: string, carrier?: string) => {
+    const stream = isSingleCamera ? scannerStream : recorderStream
+    if (!stream) {
+      console.error('[RecordingView] No stream available to record')
+      return
+    }
+
+    // Check for existing recording with this tracking number
     try {
-      await startRecording(lastScan.trackingNumber, lastScan.carrier)
+      const existing = await window.api.recordings.getByTracking(trackingNumber)
+      if (existing && existing.status === 'saved') {
+        // Show duplicate dialog
+        setDuplicateDialog({
+          trackingNumber,
+          carrier,
+          existingId: existing.id,
+          existingFileKey: existing.fileKey,
+        })
+        return
+      }
+    } catch (err) {
+      console.error('[RecordingView] Duplicate check failed:', err)
+    }
+
+    try {
+      await startRecording(trackingNumber, carrier)
+      currentTrackingRef.current = trackingNumber
     } catch (err) {
       console.error('[RecordingView] Start recording failed:', err)
     }
-  }, [lastScan, startRecording])
+  }, [isSingleCamera, scannerStream, recorderStream, startRecording])
+
+  /** Overwrite existing recording and start new */
+  const handleOverwrite = useCallback(async () => {
+    if (!duplicateDialog) return
+
+    const { trackingNumber, carrier, existingId, existingFileKey } = duplicateDialog
+    setDuplicateDialog(null)
+
+    // Delete old file + DB row
+    try {
+      await window.api.storage.deleteFile(existingFileKey)
+      await window.api.recordings.delete(existingId)
+    } catch (err) {
+      console.error('[RecordingView] Failed to delete old recording:', err)
+    }
+
+    // Start new recording
+    try {
+      await startRecording(trackingNumber, carrier)
+      currentTrackingRef.current = trackingNumber
+    } catch (err) {
+      console.error('[RecordingView] Start recording after overwrite failed:', err)
+    }
+  }, [duplicateDialog, startRecording])
 
   const handleStopRecording = useCallback(async () => {
     try {
       const summary = await stopRecording()
       console.log('[RecordingView] Recording saved:', summary)
+      currentTrackingRef.current = null
     } catch (err) {
       console.error('[RecordingView] Stop recording failed:', err)
     }
   }, [stopRecording])
 
   const handleCancelRecording = useCallback(async () => {
+    setShowCancelConfirm(true)
+  }, [])
+
+  const handleConfirmCancel = useCallback(async () => {
+    setShowCancelConfirm(false)
     try {
       await cancelRecording()
+      currentTrackingRef.current = null
     } catch (err) {
       console.error('[RecordingView] Cancel recording failed:', err)
     }
   }, [cancelRecording])
+
+  /** Manual start button — uses doStartRecording with duplicate check */
+  const handleStartRecording = useCallback(async () => {
+    if (!lastScan) return
+    await doStartRecording(lastScan.trackingNumber, lastScan.carrier)
+  }, [lastScan, doStartRecording])
+
+  // ─── Auto-trigger on QR scan ───────────────────────────────
+  const handleScanAutoTrigger = useCallback(async (order: ScannedOrder) => {
+    const stream = isSingleCamera ? scannerStream : recorderStream
+    if (!stream) return // No stream → can't record
+
+    if (isRecording) {
+      // Same QR while recording → ignore
+      if (currentTrackingRef.current === order.trackingNumber) return
+
+      // Different QR while recording → auto-save current, start new
+      try {
+        const summary = await stopRecording()
+        console.log('[RecordingView] Auto-saved for new order:', summary)
+        currentTrackingRef.current = null
+      } catch (err) {
+        console.error('[RecordingView] Auto-save failed:', err)
+        return
+      }
+    }
+
+    // Start recording for the new order (with duplicate check)
+    await doStartRecording(order.trackingNumber, order.carrier)
+  }, [isSingleCamera, scannerStream, recorderStream, isRecording, stopRecording, doStartRecording])
+
+  // Keep ref in sync with latest callback
+  useEffect(() => {
+    autoTriggerRef.current = handleScanAutoTrigger
+  }, [handleScanAutoTrigger])
+
   // ─── Scan flash animation ──────────────────────────────────
   const [showScanFlash, setShowScanFlash] = useState(false)
 
@@ -397,6 +534,84 @@ export function RecordingView() {
       <div className="mt-6">
         <ProductList />
       </div>
+
+      {/* Duplicate tracking dialog */}
+      {duplicateDialog && (
+        <DialogOverlay>
+          <div className="bg-surface-900 border border-surface-700 rounded-xl p-6 w-full max-w-sm shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-warning-500/10 rounded-lg flex items-center justify-center">
+                <AlertTriangle className="w-5 h-5 text-warning-400" />
+              </div>
+              <div>
+                <h3 className="text-surface-100 text-sm font-semibold">Đơn đã quay rồi</h3>
+                <p className="text-surface-400 text-xs font-mono mt-0.5">{duplicateDialog.trackingNumber}</p>
+              </div>
+            </div>
+            <p className="text-surface-300 text-sm mb-5">
+              Đơn này đã được quay trước đó. Bạn có muốn ghi đè video cũ không?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={handleOverwrite}
+                className="flex-1 px-4 py-2 bg-warning-500 hover:bg-warning-600 text-white text-xs font-medium rounded-md transition-colors cursor-pointer"
+              >
+                Ghi đè
+              </button>
+              <button
+                onClick={() => setDuplicateDialog(null)}
+                className="flex-1 px-4 py-2 bg-surface-800 hover:bg-surface-700 text-surface-300 text-xs font-medium rounded-md transition-colors cursor-pointer"
+              >
+                Hủy
+              </button>
+            </div>
+          </div>
+        </DialogOverlay>
+      )}
+
+      {/* Cancel confirmation dialog */}
+      {showCancelConfirm && (
+        <DialogOverlay>
+          <div className="bg-surface-900 border border-surface-700 rounded-xl p-6 w-full max-w-sm shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-danger-500/10 rounded-lg flex items-center justify-center">
+                <Trash2 className="w-5 h-5 text-danger-400" />
+              </div>
+              <h3 className="text-surface-100 text-sm font-semibold">Hủy ghi hình?</h3>
+            </div>
+            <p className="text-surface-300 text-sm mb-5">
+              Video đang quay sẽ bị xóa và không thể khôi phục.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={handleConfirmCancel}
+                className="flex-1 px-4 py-2 bg-danger-500 hover:bg-danger-600 text-white text-xs font-medium rounded-md transition-colors cursor-pointer"
+              >
+                Xóa video
+              </button>
+              <button
+                onClick={() => setShowCancelConfirm(false)}
+                className="flex-1 px-4 py-2 bg-surface-800 hover:bg-surface-700 text-surface-300 text-xs font-medium rounded-md transition-colors cursor-pointer"
+              >
+                Tiếp tục quay
+              </button>
+            </div>
+          </div>
+        </DialogOverlay>
+      )}
+
+      {/* Max duration auto-stop toast */}
+      {showMaxDurationToast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-surface-900 border border-warning-500/30 rounded-xl px-5 py-3 shadow-2xl flex items-center gap-3 animate-fade-in">
+          <Timer className="w-5 h-5 text-warning-400" />
+          <div>
+            <p className="text-surface-200 text-sm font-medium">Đã tự động dừng quay</p>
+            <p className="text-surface-400 text-xs">
+              Đạt thời gian tối đa ({Math.floor(maxDurationSeconds / 60)} phút)
+            </p>
+          </div>
+        </div>
+      )}
     </>
   )
 }
@@ -616,6 +831,14 @@ function ScanStatusBadge({ isScanning, lastScan, scanCount }: {
           </>
         )}
       </span>
+    </div>
+  )
+}
+
+function DialogOverlay({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      {children}
     </div>
   )
 }
