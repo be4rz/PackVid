@@ -47,6 +47,34 @@ export function initDatabase() {
     )
   `)
 
+  // Ensure recordings table exists
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS recordings (
+      id TEXT PRIMARY KEY NOT NULL,
+      tracking_number TEXT NOT NULL,
+      carrier TEXT,
+      file_key TEXT NOT NULL,
+      file_size INTEGER,
+      duration INTEGER,
+      status TEXT NOT NULL DEFAULT 'recording',
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      created_at INTEGER NOT NULL
+    )
+  `)
+
+  // ─── Default settings ────────────────────────────────────────
+  const defaultStoragePath = isDev
+    ? path.join(process.env.APP_ROOT!, 'storage')
+    : path.join(app.getPath('userData'), 'storage')
+
+  const storedValue = JSON.stringify(defaultStoragePath)
+
+  sqlite.prepare(`
+    INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+  `).run('storage_base_path', storedValue, Date.now())
+
   db = drizzle(sqlite, { schema })
 }
 

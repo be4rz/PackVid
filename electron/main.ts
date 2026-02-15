@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { initDatabase } from './db'
 import { registerSettingsHandlers } from './ipc/settings'
+import { registerStorageHandlers } from './ipc/storage'
+import { registerRecordingsHandlers } from './ipc/recordings'
 
 const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -70,6 +72,8 @@ app.on('activate', () => {
 app.whenReady().then(async () => {
   initDatabase()
   registerSettingsHandlers()
+  registerStorageHandlers()
+  registerRecordingsHandlers()
 
   // Request camera permission on macOS (triggers native dialog on first launch)
   if (process.platform === 'darwin') {

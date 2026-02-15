@@ -18,12 +18,14 @@ import {
   AlertTriangle, Trash2, Play,
   Info, ShieldAlert, RotateCcw,
   Truck, QrCode, History,
+  Circle, Square, X,
 } from 'lucide-react'
 import { ProductList } from '../modules/_example/presentation/components/ProductList'
 import { CameraFeed } from '../shared/components/CameraFeed'
 import { useCamera } from '../shared/hooks/useCamera'
 import { useCameraSettings } from '../shared/hooks/useCameraSettings'
 import { useQRScanner } from '../modules/qr-scanner/presentation/hooks/useQRScanner'
+import { useRecorder } from '../modules/recording/presentation/hooks/useRecorder'
 import { playBeep } from '../shared/lib/audio'
 import type { ScannedOrder, Carrier } from '../modules/qr-scanner/domain/entities/ScannedOrder'
 import type { CameraStatus } from '../shared/types/camera'
@@ -56,6 +58,10 @@ export function RecordingView() {
   const [scannerStatus, setScannerStatus] = useState<CameraStatus>('idle')
   const [recorderStatus, setRecorderStatus] = useState<CameraStatus>('idle')
 
+  // ─── Derived: single-camera mode ───────────────────────────
+  const isSingleCamera = assignments.scanner !== null
+    && assignments.scanner === assignments.recorder
+
   // ─── QR Scanner ─────────────────────────────────────────────
   const scannerVideoRef = useRef<HTMLVideoElement | null>(null)
 
@@ -69,6 +75,42 @@ export function RecordingView() {
     { onScan: handleScan },
   )
 
+  // ─── Recording ──────────────────────────────────────────────
+  const {
+    isRecording,
+    isPaused,
+    duration: recordingDuration,
+    startRecording,
+    stopRecording,
+    cancelRecording,
+  } = useRecorder(isSingleCamera ? scannerStream : recorderStream)
+
+  // Handlers that catch errors and log them
+  const handleStartRecording = useCallback(async () => {
+    if (!lastScan) return
+    try {
+      await startRecording(lastScan.trackingNumber, lastScan.carrier)
+    } catch (err) {
+      console.error('[RecordingView] Start recording failed:', err)
+    }
+  }, [lastScan, startRecording])
+
+  const handleStopRecording = useCallback(async () => {
+    try {
+      const summary = await stopRecording()
+      console.log('[RecordingView] Recording saved:', summary)
+    } catch (err) {
+      console.error('[RecordingView] Stop recording failed:', err)
+    }
+  }, [stopRecording])
+
+  const handleCancelRecording = useCallback(async () => {
+    try {
+      await cancelRecording()
+    } catch (err) {
+      console.error('[RecordingView] Cancel recording failed:', err)
+    }
+  }, [cancelRecording])
   // ─── Scan flash animation ──────────────────────────────────
   const [showScanFlash, setShowScanFlash] = useState(false)
 
@@ -99,9 +141,6 @@ export function RecordingView() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [resetScanner])
-
-  const isSingleCamera = assignments.scanner !== null
-    && assignments.scanner === assignments.recorder
 
   // ─── Acquire streams when assignments change ────────────────
   const acquireStream = useCallback(async (
@@ -231,7 +270,17 @@ export function RecordingView() {
               <ScanStatusBadge isScanning={isScanning} lastScan={lastScan} scanCount={scanCount} />
             </div>
             {/* Info panel (same column layout, takes 1 col) */}
-            <InfoPanel lastScan={lastScan} scanHistory={scanHistory} onReset={resetScanner} />
+            <InfoPanel
+              lastScan={lastScan}
+              scanHistory={scanHistory}
+              onReset={resetScanner}
+              isRecording={isRecording}
+              duration={recordingDuration}
+              onStartRecording={handleStartRecording}
+              onStopRecording={handleStopRecording}
+              onCancelRecording={handleCancelRecording}
+              canStartRecording={!!lastScan && !!(isSingleCamera ? scannerStream : recorderStream)}
+            />
           </>
         ) : (
           <>
@@ -253,9 +302,26 @@ export function RecordingView() {
               role="recorder"
               label="Camera 2 — Ghi hình"
               status={recorderStatus}
+              isRecording={isRecording}
+              isPaused={isPaused}
+              duration={recordingDuration}
+              onStart={handleStartRecording}
+              onStop={handleStopRecording}
+              onCancel={handleCancelRecording}
+              canStartRecording={!!lastScan && !!recorderStream}
             />
             {/* Info panel */}
-            <InfoPanel lastScan={lastScan} scanHistory={scanHistory} onReset={resetScanner} />
+            <InfoPanel
+              lastScan={lastScan}
+              scanHistory={scanHistory}
+              onReset={resetScanner}
+              isRecording={isRecording}
+              duration={recordingDuration}
+              onStartRecording={handleStartRecording}
+              onStopRecording={handleStopRecording}
+              onCancelRecording={handleCancelRecording}
+              canStartRecording={!!lastScan && !!(isSingleCamera ? scannerStream : recorderStream)}
+            />
           </>
         )}
       </div>
@@ -337,10 +403,16 @@ export function RecordingView() {
 
 // ─── Sub-components ──────────────────────────────────────────
 
-function InfoPanel({ lastScan, scanHistory, onReset }: {
+function InfoPanel({ lastScan, scanHistory, onReset, isRecording, duration, onStartRecording, onStopRecording, onCancelRecording, canStartRecording }: {
   lastScan: ScannedOrder | null
   scanHistory: ScannedOrder[]
   onReset: () => void
+  isRecording?: boolean
+  duration?: number
+  onStartRecording?: () => void
+  onStopRecording?: () => void
+  onCancelRecording?: () => void
+  canStartRecording?: boolean
 }) {
   if (!lastScan) {
     // State 1: No scan yet
@@ -372,8 +444,15 @@ function InfoPanel({ lastScan, scanHistory, onReset }: {
   // Previous scans (exclude the current one)
   const previousScans = scanHistory.slice(1, 4)
 
+  /** Format seconds into MM:SS */
+  const formatDuration = (s: number) => {
+    const mm = String(Math.floor(s / 60)).padStart(2, '0')
+    const ss = String(s % 60).padStart(2, '0')
+    return `${mm}:${ss}`
+  }
+
   return (
-    <div className="bg-surface-900 rounded-xl border border-success-500/30 p-5 flex flex-col">
+    <div className={`bg-surface-900 rounded-xl border ${isRecording ? 'border-danger-500/30' : 'border-success-500/30'} p-5 flex flex-col transition-colors`}>
       <h3 className="text-surface-300 text-xs font-medium uppercase tracking-wider mb-4">
         Đơn hàng hiện tại
       </h3>
@@ -409,13 +488,21 @@ function InfoPanel({ lastScan, scanHistory, onReset }: {
           )}
         </div>
 
-        {/* Scan time */}
+        {/* Scan time or Recording duration */}
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Clock className="w-3.5 h-3.5 text-surface-500" />
-            <span className="text-surface-500 text-[11px] font-medium uppercase tracking-wider">Quét lúc</span>
+            <span className="text-surface-500 text-[11px] font-medium uppercase tracking-wider">
+              {isRecording ? 'Đang quay' : 'Quét lúc'}
+            </span>
           </div>
-          <p className="text-surface-300 text-sm font-mono">{scanTime}</p>
+          {isRecording ? (
+            <p className="text-danger-400 text-sm font-mono font-bold animate-pulse-recording">
+              ● REC {formatDuration(duration ?? 0)}
+            </p>
+          ) : (
+            <p className="text-surface-300 text-sm font-mono">{scanTime}</p>
+          )}
         </div>
 
         {/* Format badge */}
@@ -450,18 +537,47 @@ function InfoPanel({ lastScan, scanHistory, onReset }: {
 
       {/* Actions */}
       <div className="flex gap-2 mt-4 pt-4 border-t border-surface-800">
-        <button className="flex-1 px-3 py-2 bg-primary-500 hover:bg-primary-600 text-white text-xs font-medium rounded-md transition-colors cursor-pointer flex items-center justify-center gap-1.5">
-          <Play className="w-3.5 h-3.5" />
-          Bắt đầu quay
-        </button>
-        <button
-          onClick={onReset}
-          className="px-3 py-2 bg-surface-800 hover:bg-surface-700 text-surface-300 text-xs font-medium rounded-md transition-colors cursor-pointer flex items-center gap-1.5"
-          title="Space / Enter"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          Quét lại
-        </button>
+        {isRecording ? (
+          <>
+            <button
+              onClick={onStopRecording}
+              className="flex-1 px-3 py-2 bg-danger-500 hover:bg-danger-600 text-white text-xs font-medium rounded-md transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <Square className="w-3.5 h-3.5 fill-white" />
+              Dừng quay
+            </button>
+            <button
+              onClick={onCancelRecording}
+              className="px-3 py-2 bg-surface-800 hover:bg-surface-700 text-surface-300 text-xs font-medium rounded-md transition-colors cursor-pointer flex items-center gap-1.5"
+            >
+              <X className="w-3.5 h-3.5" />
+              Hủy
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={onStartRecording}
+              disabled={!canStartRecording}
+              className={`flex-1 px-3 py-2 text-xs font-medium rounded-md transition-colors flex items-center justify-center gap-1.5
+                ${canStartRecording
+                  ? 'bg-danger-500 hover:bg-danger-600 text-white cursor-pointer'
+                  : 'bg-surface-800 text-surface-600 cursor-not-allowed'
+                }`}
+            >
+              <Circle className="w-3.5 h-3.5 fill-current" />
+              Bắt đầu quay
+            </button>
+            <button
+              onClick={onReset}
+              className="px-3 py-2 bg-surface-800 hover:bg-surface-700 text-surface-300 text-xs font-medium rounded-md transition-colors cursor-pointer flex items-center gap-1.5"
+              title="Space / Enter"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Quét lại
+            </button>
+          </>
+        )}
       </div>
     </div>
   )

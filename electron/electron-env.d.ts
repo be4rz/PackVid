@@ -30,5 +30,68 @@ interface Window {
       set: (key: string, value: unknown) => Promise<void>
       getAll: () => Promise<Record<string, unknown>>
     }
+    storage: {
+      getBasePath: () => Promise<string>
+      setBasePath: (path: string) => Promise<void>
+      ensureDir: (fileKey: string) => Promise<void>
+      writeChunk: (fileKey: string, chunk: Uint8Array) => Promise<void>
+      finalize: (fileKey: string) => Promise<{ fileSize: number }>
+      deleteFile: (fileKey: string) => Promise<void>
+      getFullPath: (fileKey: string) => Promise<string>
+    }
+    recordings: {
+      create: (data: {
+        id: string
+        trackingNumber: string
+        carrier?: string
+        fileKey: string
+        status?: string
+        startedAt: number
+        createdAt: number
+      }) => Promise<void>
+      update: (id: string, data: {
+        status?: string
+        fileSize?: number
+        duration?: number
+        finishedAt?: number
+      }) => Promise<void>
+      getById: (id: string) => Promise<{
+        id: string
+        trackingNumber: string
+        carrier: string | null
+        fileKey: string
+        fileSize: number | null
+        duration: number | null
+        status: string
+        startedAt: number
+        finishedAt: number | null
+        createdAt: number
+      } | null>
+      getAll: (options?: { page?: number; limit?: number }) => Promise<Array<{
+        id: string
+        trackingNumber: string
+        carrier: string | null
+        fileKey: string
+        fileSize: number | null
+        duration: number | null
+        status: string
+        startedAt: number
+        finishedAt: number | null
+        createdAt: number
+      }>>
+      delete: (id: string) => Promise<{ fileKey: string } | null>
+      getByTracking: (trackingNumber: string) => Promise<{
+        id: string
+        trackingNumber: string
+        carrier: string | null
+        fileKey: string
+        fileSize: number | null
+        duration: number | null
+        status: string
+        startedAt: number
+        finishedAt: number | null
+        createdAt: number
+      } | null>
+    }
   }
 }

@@ -35,3 +35,19 @@ export const appSettings = sqliteTable('app_settings', {
   value: text('value').notNull(),            // JSON-stringified
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 })
+
+// ─── Recordings: Video Recording Metadata ───────────────────────
+// Maps to: src/modules/recording/domain/entities/Recording.ts
+
+export const recordings = sqliteTable('recordings', {
+  id: text('id').primaryKey(),                                       // UUID
+  trackingNumber: text('tracking_number').notNull(),                 // e.g. SPXVN061116275422
+  carrier: text('carrier'),                                          // 'SPX' | 'GHN' | 'GHTK'
+  fileKey: text('file_key').notNull(),                               // "2026/02/15/SPXVN061116275422.webm"
+  fileSize: integer('file_size'),                                    // bytes (updated after recording)
+  duration: integer('duration'),                                     // seconds (updated after recording)
+  status: text('status').notNull().default('recording'),             // 'recording' | 'saved' | 'failed'
+  startedAt: integer('started_at', { mode: 'timestamp' }).notNull(),
+  finishedAt: integer('finished_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+})

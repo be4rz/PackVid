@@ -5,15 +5,19 @@
  * appropriate placeholder/error states. Supports scanner and
  * recorder visual modes with distinct overlays.
  *
- * Recording controls are NOT included here — they belong to
- * Feature 3 (Video Recording).
+ * Recording controls (Start/Stop/Cancel) are shown in the footer
+ * when role="recorder" and recording callbacks are provided.
  *
  * @example
  * <CameraFeed
  *   stream={mediaStream}
- *   role="scanner"
- *   label="Camera 1 — Quét mã"
+ *   role="recorder"
+ *   label="Camera 2 — Ghi hình"
  *   status="active"
+ *   isRecording={true}
+ *   duration={102}
+ *   onStop={() => handleStop()}
+ *   onCancel={() => handleCancel()}
  * />
  */
 
@@ -25,8 +29,17 @@ import {
   Circle,
   Loader2,
   VideoOff,
+  Square,
+  X,
 } from 'lucide-react'
 import type { CameraRole, CameraStatus } from '../types/camera'
+
+/** Format seconds into MM:SS display */
+function formatDuration(seconds: number): string {
+  const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
+  const ss = String(seconds % 60).padStart(2, '0')
+  return `${mm}:${ss}`
+}
 
 interface CameraFeedProps {
   /** Live camera stream (null when not connected) */
@@ -41,9 +54,40 @@ interface CameraFeedProps {
   fullWidth?: boolean
   /** Optional: callback to receive the <video> element ref (for QR scanning) */
   onVideoRef?: (el: HTMLVideoElement | null) => void
+
+  // ─── Recording props (only used when role="recorder") ────
+  /** Whether a recording is currently in progress */
+  isRecording?: boolean
+  /** Whether the recording is paused */
+  isPaused?: boolean
+  /** Live duration in seconds */
+  duration?: number
+  /** Start recording callback */
+  onStart?: () => void
+  /** Stop recording callback */
+  onStop?: () => void
+  /** Cancel recording callback */
+  onCancel?: () => void
+  /** Whether the start button should be disabled (e.g. no scanned order) */
+  canStartRecording?: boolean
 }
 
-export function CameraFeed({ stream, role, label, status, fullWidth = false, onVideoRef }: CameraFeedProps) {
+export function CameraFeed({
+  stream,
+  role,
+  label,
+  status,
+  fullWidth = false,
+  onVideoRef,
+  // Recording props
+  isRecording = false,
+  isPaused = false,
+  duration = 0,
+  onStart,
+  onStop,
+  onCancel,
+  canStartRecording = false,
+}: CameraFeedProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
 
   // ─── Bind MediaStream to <video> element ────────────────────
@@ -68,9 +112,10 @@ export function CameraFeed({ stream, role, label, status, fullWidth = false, onV
 
   const isActive = status === 'active'
   const isError = status === 'error' || status === 'permission_denied'
+  const isRecorder = role === 'recorder'
 
   return (
-    <div className={`bg-surface-900 rounded-xl border border-surface-800 overflow-hidden group ${fullWidth ? 'col-span-2' : ''}`}>
+    <div className={`bg-surface-900 rounded-xl border ${isRecording ? 'border-danger-500/40' : 'border-surface-800'} overflow-hidden group transition-colors ${fullWidth ? 'col-span-2' : ''}`}>
       {/* Camera viewport */}
       <div className="aspect-video bg-surface-950 relative flex items-center justify-center overflow-hidden">
         {/* Live video feed */}
@@ -82,6 +127,11 @@ export function CameraFeed({ stream, role, label, status, fullWidth = false, onV
             playsInline
             className="absolute inset-0 w-full h-full object-cover"
           />
+        )}
+
+        {/* Recording vignette overlay */}
+        {isRecording && (
+          <div className="absolute inset-0 z-10 pointer-events-none shadow-[inset_0_0_60px_rgba(239,68,68,0.15)]" />
         )}
 
         {/* State overlays — shown when no stream */}
@@ -153,13 +203,22 @@ export function CameraFeed({ stream, role, label, status, fullWidth = false, onV
           </span>
         </div>
 
-        {/* Top-right: Recorder standby badge */}
-        {role === 'recorder' && (
+        {/* Top-right: Recorder status badge */}
+        {isRecorder && (
           <div className="absolute top-3 right-3 z-20">
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-900/70 text-surface-400 text-[10px] font-mono uppercase tracking-wider">
-              <Circle className="w-2.5 h-2.5 text-surface-600" />
-              Standby
-            </span>
+            {isRecording ? (
+              /* Recording badge — red pulsing with timer */
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-danger-500/20 text-danger-400 text-[11px] font-mono uppercase tracking-wider animate-pulse-recording">
+                <Circle className="w-2.5 h-2.5 fill-danger-500 text-danger-500" />
+                REC {formatDuration(duration)}
+              </span>
+            ) : (
+              /* Standby badge */
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-900/70 text-surface-400 text-[10px] font-mono uppercase tracking-wider">
+                <Circle className="w-2.5 h-2.5 text-surface-600" />
+                Standby
+              </span>
+            )}
           </div>
         )}
 
@@ -172,7 +231,46 @@ export function CameraFeed({ stream, role, label, status, fullWidth = false, onV
       {/* Footer */}
       <div className="flex items-center justify-between px-4 py-3 border-t border-surface-800">
         <span className="text-xs text-surface-400 font-medium">{label}</span>
-        {/* Recording controls intentionally omitted — deferred to Feature 3 */}
+
+        {/* Recording controls — only for recorder role */}
+        {isRecorder && (
+          <div className="flex items-center gap-2">
+            {isRecording ? (
+              <>
+                {/* Stop button */}
+                <button
+                  onClick={onStop}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-danger-500 hover:bg-danger-600 text-white text-xs font-medium rounded-md transition-colors cursor-pointer"
+                >
+                  <Square className="w-3 h-3 fill-white" />
+                  Dừng
+                </button>
+                {/* Cancel button */}
+                <button
+                  onClick={onCancel}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-surface-800 hover:bg-surface-700 text-surface-300 text-xs font-medium rounded-md transition-colors cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                  Hủy
+                </button>
+              </>
+            ) : (
+              /* Start button — disabled when no scanned order or no stream */
+              <button
+                onClick={onStart}
+                disabled={!canStartRecording}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors
+                  ${canStartRecording
+                    ? 'bg-danger-500 hover:bg-danger-600 text-white cursor-pointer'
+                    : 'bg-surface-800 text-surface-600 cursor-not-allowed'
+                  }`}
+              >
+                <Circle className="w-3 h-3 fill-current" />
+                Bắt đầu
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
