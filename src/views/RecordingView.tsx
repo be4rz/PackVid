@@ -1,27 +1,39 @@
 /**
  * RecordingView — Main recording page with live camera feeds
  *
- * Wires useCamera + useCameraSettings + CameraFeed together.
+ * Wires useCamera + useCameraSettings + CameraFeed + useQRScanner together.
  * Handles:
  * - Loading saved camera assignments
  * - Acquiring streams for assigned cameras
+ * - QR/barcode scanning from scanner camera feed
  * - Single-camera mode (1 feed spanning 2 cols)
  * - Hot-plug via useCamera's devicechange listener
  * - Permission flow with clear messaging
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Video, Clock, ChevronRight,
-  Scan, CheckCircle2,
+  Scan, CheckCircle2, Package,
   AlertTriangle, Trash2, Play,
-  Info, ShieldAlert,
+  Info, ShieldAlert, RotateCcw,
+  Truck, QrCode, History,
 } from 'lucide-react'
 import { ProductList } from '../modules/_example/presentation/components/ProductList'
 import { CameraFeed } from '../shared/components/CameraFeed'
 import { useCamera } from '../shared/hooks/useCamera'
 import { useCameraSettings } from '../shared/hooks/useCameraSettings'
+import { useQRScanner } from '../modules/qr-scanner/presentation/hooks/useQRScanner'
+import { playBeep } from '../shared/lib/audio'
+import type { ScannedOrder, Carrier } from '../modules/qr-scanner/domain/entities/ScannedOrder'
 import type { CameraStatus } from '../shared/types/camera'
+
+/** Carrier display names (Vietnamese) */
+const CARRIER_NAMES: Record<Carrier, string> = {
+  SPX: 'SPX Express',
+  GHN: 'Giao Hàng Nhanh',
+  GHTK: 'Giao Hàng Tiết Kiệm',
+}
 
 export function RecordingView() {
   const {
@@ -43,6 +55,50 @@ export function RecordingView() {
   const [recorderStream, setRecorderStream] = useState<MediaStream | null>(null)
   const [scannerStatus, setScannerStatus] = useState<CameraStatus>('idle')
   const [recorderStatus, setRecorderStatus] = useState<CameraStatus>('idle')
+
+  // ─── QR Scanner ─────────────────────────────────────────────
+  const scannerVideoRef = useRef<HTMLVideoElement | null>(null)
+
+  // Beep on each new scan
+  const handleScan = useCallback(() => {
+    playBeep()
+  }, [])
+
+  const { lastScan, isScanning, scanCount, scanHistory, reset: resetScanner } = useQRScanner(
+    scannerVideoRef,
+    { onScan: handleScan },
+  )
+
+  // ─── Scan flash animation ──────────────────────────────────
+  const [showScanFlash, setShowScanFlash] = useState(false)
+
+  useEffect(() => {
+    if (!lastScan) return
+    setShowScanFlash(true)
+    const timer = setTimeout(() => setShowScanFlash(false), 600)
+    return () => clearTimeout(timer)
+  }, [lastScan])
+
+  // Callback to receive scanner video element from CameraFeed
+  const handleScannerVideoRef = useCallback((el: HTMLVideoElement | null) => {
+    scannerVideoRef.current = el
+  }, [])
+
+  // ─── Keyboard shortcut: Space/Enter to reset scanner ─────
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is typing in an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
+      if (e.code === 'Space' || e.code === 'Enter') {
+        e.preventDefault()
+        resetScanner()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [resetScanner])
 
   const isSingleCamera = assignments.scanner !== null
     && assignments.scanner === assignments.recorder
@@ -163,25 +219,34 @@ export function RecordingView() {
         {/* Single-camera mode: 1 large feed */}
         {isSingleCamera ? (
           <>
-            <CameraFeed
-              stream={scannerStream}
-              role="scanner"
-              label={`Camera — Quét mã & Ghi hình`}
-              status={scannerStatus}
-              fullWidth
-            />
+            <div className={`col-span-2 relative ${showScanFlash ? 'ring-2 ring-success-400 ring-offset-2 ring-offset-surface-950 rounded-xl' : ''} transition-all duration-300`}>
+              <CameraFeed
+                stream={scannerStream}
+                role="scanner"
+                label={`Camera — Quét mã & Ghi hình`}
+                status={scannerStatus}
+                onVideoRef={handleScannerVideoRef}
+              />
+              {/* Scan status badge */}
+              <ScanStatusBadge isScanning={isScanning} lastScan={lastScan} scanCount={scanCount} />
+            </div>
             {/* Info panel (same column layout, takes 1 col) */}
-            <InfoPanel />
+            <InfoPanel lastScan={lastScan} scanHistory={scanHistory} onReset={resetScanner} />
           </>
         ) : (
           <>
             {/* Camera 1 - Scanner */}
-            <CameraFeed
-              stream={scannerStream}
-              role="scanner"
-              label="Camera 1 — Quét mã"
-              status={scannerStatus}
-            />
+            <div className={`relative ${showScanFlash ? 'ring-2 ring-success-400 ring-offset-2 ring-offset-surface-950 rounded-xl' : ''} transition-all duration-300`}>
+              <CameraFeed
+                stream={scannerStream}
+                role="scanner"
+                label="Camera 1 — Quét mã"
+                status={scannerStatus}
+                onVideoRef={handleScannerVideoRef}
+              />
+              {/* Scan status badge */}
+              <ScanStatusBadge isScanning={isScanning} lastScan={lastScan} scanCount={scanCount} />
+            </div>
             {/* Camera 2 - Recorder */}
             <CameraFeed
               stream={isSingleCamera ? scannerStream : recorderStream}
@@ -190,7 +255,7 @@ export function RecordingView() {
               status={recorderStatus}
             />
             {/* Info panel */}
-            <InfoPanel />
+            <InfoPanel lastScan={lastScan} scanHistory={scanHistory} onReset={resetScanner} />
           </>
         )}
       </div>
@@ -272,19 +337,169 @@ export function RecordingView() {
 
 // ─── Sub-components ──────────────────────────────────────────
 
-function InfoPanel() {
+function InfoPanel({ lastScan, scanHistory, onReset }: {
+  lastScan: ScannedOrder | null
+  scanHistory: ScannedOrder[]
+  onReset: () => void
+}) {
+  if (!lastScan) {
+    // State 1: No scan yet
+    return (
+      <div className="bg-surface-900 rounded-xl border border-surface-800 p-5 flex flex-col">
+        <h3 className="text-surface-300 text-xs font-medium uppercase tracking-wider mb-4">
+          Đơn hàng hiện tại
+        </h3>
+        <div className="flex-1 flex flex-col items-center justify-center text-center">
+          <div className="w-16 h-16 bg-surface-800 rounded-2xl flex items-center justify-center mb-4">
+            <Scan className="w-8 h-8 text-surface-500" />
+          </div>
+          <p className="text-surface-400 text-sm mb-1">Chưa quét mã QR</p>
+          <p className="text-surface-600 text-xs">Đưa mã vận đơn vào Camera 1 để bắt đầu</p>
+        </div>
+      </div>
+    )
+  }
+
+  // State 2: Order scanned
+  const scanTime = lastScan.scannedAt.toLocaleTimeString('vi-VN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+  const carrierName = lastScan.carrier ? CARRIER_NAMES[lastScan.carrier] : null
+  const isUnrecognized = !lastScan.carrier
+
+  // Previous scans (exclude the current one)
+  const previousScans = scanHistory.slice(1, 4)
+
   return (
-    <div className="bg-surface-900 rounded-xl border border-surface-800 p-5 flex flex-col">
+    <div className="bg-surface-900 rounded-xl border border-success-500/30 p-5 flex flex-col">
       <h3 className="text-surface-300 text-xs font-medium uppercase tracking-wider mb-4">
         Đơn hàng hiện tại
       </h3>
-      <div className="flex-1 flex flex-col items-center justify-center text-center">
-        <div className="w-16 h-16 bg-surface-800 rounded-2xl flex items-center justify-center mb-4">
-          <Scan className="w-8 h-8 text-surface-500" />
+      <div className="flex-1 flex flex-col gap-4">
+        {/* Tracking number */}
+        <div>
+          <div className="flex items-center gap-2 mb-1.5">
+            <QrCode className="w-3.5 h-3.5 text-surface-500" />
+            <span className="text-surface-500 text-[11px] font-medium uppercase tracking-wider">Mã vận đơn</span>
+          </div>
+          <p className="text-surface-100 text-lg font-mono font-bold tracking-wide">
+            {lastScan.trackingNumber}
+          </p>
         </div>
-        <p className="text-surface-400 text-sm mb-1">Chưa quét mã QR</p>
-        <p className="text-surface-600 text-xs">Đưa mã vận đơn vào Camera 1 để bắt đầu</p>
+
+        {/* Carrier */}
+        <div>
+          <div className="flex items-center gap-2 mb-1.5">
+            <Truck className="w-3.5 h-3.5 text-surface-500" />
+            <span className="text-surface-500 text-[11px] font-medium uppercase tracking-wider">Đơn vị vận chuyển</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium
+              ${isUnrecognized ? 'bg-warning-500/10 text-warning-400' : 'bg-primary-500/10 text-primary-400'}`}>
+              <Package className="w-3 h-3" />
+              {carrierName ?? 'Không xác định'}
+            </span>
+          </div>
+          {isUnrecognized && (
+            <p className="text-warning-500 text-[11px] mt-1.5">
+              Mã không nhận dạng được đơn vị vận chuyển
+            </p>
+          )}
+        </div>
+
+        {/* Scan time */}
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Clock className="w-3.5 h-3.5 text-surface-500" />
+            <span className="text-surface-500 text-[11px] font-medium uppercase tracking-wider">Quét lúc</span>
+          </div>
+          <p className="text-surface-300 text-sm font-mono">{scanTime}</p>
+        </div>
+
+        {/* Format badge */}
+        <div className="mt-auto pt-2 flex items-center gap-2">
+          <span className="text-[10px] text-surface-600 bg-surface-800 rounded px-1.5 py-0.5 font-mono">
+            {lastScan.format}
+          </span>
+        </div>
       </div>
+
+      {/* Scan history mini-list */}
+      {previousScans.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-surface-800">
+          <div className="flex items-center gap-1.5 mb-2">
+            <History className="w-3 h-3 text-surface-600" />
+            <span className="text-surface-600 text-[10px] font-medium uppercase tracking-wider">Lịch sử quét</span>
+          </div>
+          <div className="space-y-1.5">
+            {previousScans.map((scan) => (
+              <div key={`${scan.trackingNumber}-${scan.scannedAt.getTime()}`} className="flex items-center justify-between">
+                <span className="text-surface-400 text-[11px] font-mono truncate max-w-[140px]">
+                  {scan.trackingNumber}
+                </span>
+                <span className="text-surface-600 text-[10px] font-mono">
+                  {scan.scannedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex gap-2 mt-4 pt-4 border-t border-surface-800">
+        <button className="flex-1 px-3 py-2 bg-primary-500 hover:bg-primary-600 text-white text-xs font-medium rounded-md transition-colors cursor-pointer flex items-center justify-center gap-1.5">
+          <Play className="w-3.5 h-3.5" />
+          Bắt đầu quay
+        </button>
+        <button
+          onClick={onReset}
+          className="px-3 py-2 bg-surface-800 hover:bg-surface-700 text-surface-300 text-xs font-medium rounded-md transition-colors cursor-pointer flex items-center gap-1.5"
+          title="Space / Enter"
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+          Quét lại
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ScanStatusBadge({ isScanning, lastScan, scanCount }: {
+  isScanning: boolean
+  lastScan: ScannedOrder | null
+  scanCount: number
+}) {
+  if (!isScanning && !lastScan) return null
+
+  return (
+    <div className="absolute bottom-14 right-3 z-30 flex items-center gap-2">
+      {/* Scan counter */}
+      {scanCount > 0 && (
+        <span className="text-[10px] font-mono text-surface-500 bg-surface-900/80 rounded px-1.5 py-0.5">
+          Đã quét: {scanCount}
+        </span>
+      )}
+      {/* Status badge */}
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium tracking-wide
+        ${lastScan
+          ? 'bg-success-500/20 text-success-400'
+          : 'bg-surface-900/80 text-surface-400'
+        }`}>
+        {lastScan ? (
+          <>
+            <CheckCircle2 className="w-3 h-3" />
+            Đã quét
+          </>
+        ) : (
+          <>
+            <QrCode className="w-3 h-3 animate-pulse" />
+            Đang quét...
+          </>
+        )}
+      </span>
     </div>
   )
 }

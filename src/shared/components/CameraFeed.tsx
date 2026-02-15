@@ -39,9 +39,11 @@ interface CameraFeedProps {
   status: CameraStatus
   /** Optional: span full width (single-camera mode) */
   fullWidth?: boolean
+  /** Optional: callback to receive the <video> element ref (for QR scanning) */
+  onVideoRef?: (el: HTMLVideoElement | null) => void
 }
 
-export function CameraFeed({ stream, role, label, status, fullWidth = false }: CameraFeedProps) {
+export function CameraFeed({ stream, role, label, status, fullWidth = false, onVideoRef }: CameraFeedProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
 
   // ─── Bind MediaStream to <video> element ────────────────────
@@ -55,10 +57,14 @@ export function CameraFeed({ stream, role, label, status, fullWidth = false }: C
       video.srcObject = null
     }
 
+    // Expose video element to parent (for QR scanning)
+    onVideoRef?.(video)
+
     return () => {
       if (video) video.srcObject = null
+      onVideoRef?.(null)
     }
-  }, [stream])
+  }, [stream, onVideoRef])
 
   const isActive = status === 'active'
   const isError = status === 'error' || status === 'permission_denied'
