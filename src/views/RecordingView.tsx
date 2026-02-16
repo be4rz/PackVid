@@ -26,6 +26,7 @@ import { useCamera } from '../shared/hooks/useCamera'
 import { useCameraSettings } from '../shared/hooks/useCameraSettings'
 import { useQRScanner } from '../modules/qr-scanner/presentation/hooks/useQRScanner'
 import { useRecorder } from '../modules/recording/presentation/hooks/useRecorder'
+import { useTTS } from '../shared/hooks/useTTS'
 import { playBeep } from '../shared/lib/audio'
 import type { ScannedOrder, Carrier } from '../modules/qr-scanner/domain/entities/ScannedOrder'
 import type { CameraStatus } from '../shared/types/camera'
@@ -35,6 +36,14 @@ const CARRIER_NAMES: Record<Carrier, string> = {
   SPX: 'SPX Express',
   GHN: 'Giao Hàng Nhanh',
   GHTK: 'Giao Hàng Tiết Kiệm',
+}
+
+/** TTS notification messages (Vietnamese) */
+const TTS_MESSAGES = {
+  recordingStarted: (trackingNumber: string) =>
+    `Bắt đầu ghi hình đơn hàng ${trackingNumber}`,
+  recordingSaved: () => 'Đã lưu video',
+  recordingCancelled: () => 'Đã hủy ghi hình',
 }
 
 export function RecordingView() {
@@ -51,6 +60,9 @@ export function RecordingView() {
     assignments,
     isLoading: isLoadingSettings,
   } = useCameraSettings(devices)
+
+  // ─── TTS ────────────────────────────────────────────────────
+  const { speak } = useTTS()
 
   // ─── Stream state ───────────────────────────────────────────
   const [scannerStream, setScannerStream] = useState<MediaStream | null>(null)
@@ -121,6 +133,7 @@ export function RecordingView() {
         const summary = await stopRecording()
         console.log('[RecordingView] Auto-stopped at max duration:', summary)
         currentTrackingRef.current = null
+        speak(TTS_MESSAGES.recordingSaved())
         setShowMaxDurationToast(true)
         setTimeout(() => setShowMaxDurationToast(false), 4000)
       } catch (err) {
@@ -160,6 +173,7 @@ export function RecordingView() {
     try {
       await startRecording(trackingNumber, carrier)
       currentTrackingRef.current = trackingNumber
+      speak(TTS_MESSAGES.recordingStarted(trackingNumber))
     } catch (err) {
       console.error('[RecordingView] Start recording failed:', err)
     }
@@ -184,6 +198,7 @@ export function RecordingView() {
     try {
       await startRecording(trackingNumber, carrier)
       currentTrackingRef.current = trackingNumber
+      speak(TTS_MESSAGES.recordingStarted(trackingNumber))
     } catch (err) {
       console.error('[RecordingView] Start recording after overwrite failed:', err)
     }
@@ -194,10 +209,11 @@ export function RecordingView() {
       const summary = await stopRecording()
       console.log('[RecordingView] Recording saved:', summary)
       currentTrackingRef.current = null
+      speak(TTS_MESSAGES.recordingSaved())
     } catch (err) {
       console.error('[RecordingView] Stop recording failed:', err)
     }
-  }, [stopRecording])
+  }, [stopRecording, speak])
 
   const handleCancelRecording = useCallback(async () => {
     setShowCancelConfirm(true)
@@ -208,10 +224,11 @@ export function RecordingView() {
     try {
       await cancelRecording()
       currentTrackingRef.current = null
+      speak(TTS_MESSAGES.recordingCancelled())
     } catch (err) {
       console.error('[RecordingView] Cancel recording failed:', err)
     }
-  }, [cancelRecording])
+  }, [cancelRecording, speak])
 
   /** Manual start button — uses doStartRecording with duplicate check */
   const handleStartRecording = useCallback(async () => {
@@ -233,6 +250,7 @@ export function RecordingView() {
         const summary = await stopRecording()
         console.log('[RecordingView] Auto-saved for new order:', summary)
         currentTrackingRef.current = null
+        speak(TTS_MESSAGES.recordingSaved())
       } catch (err) {
         console.error('[RecordingView] Auto-save failed:', err)
         return
@@ -241,7 +259,7 @@ export function RecordingView() {
 
     // Start recording for the new order (with duplicate check)
     await doStartRecording(order.trackingNumber, order.carrier)
-  }, [isSingleCamera, scannerStream, recorderStream, isRecording, stopRecording, doStartRecording])
+  }, [isSingleCamera, scannerStream, recorderStream, isRecording, stopRecording, doStartRecording, speak])
 
   // Keep ref in sync with latest callback
   useEffect(() => {

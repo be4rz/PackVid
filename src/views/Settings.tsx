@@ -15,9 +15,12 @@ import {
   ChevronDown,
   RefreshCw,
   Info,
+  Volume2,
 } from 'lucide-react'
 import { useCamera } from '../shared/hooks/useCamera'
 import { useCameraSettings } from '../shared/hooks/useCameraSettings'
+import { useTTS } from '../shared/hooks/useTTS'
+import { getVietnameseVoices, getAvailableVoices } from '../shared/lib/tts'
 import { CameraFeed } from '../shared/components/CameraFeed'
 import type { CameraRole } from '../shared/types/camera'
 import { useState, useEffect } from 'react'
@@ -25,6 +28,7 @@ import { useState, useEffect } from 'react'
 export function Settings() {
   const { devices, permission, isLoading: isLoadingDevices, requestPermission, requestStream, releaseStream, refreshDevices } = useCamera()
   const { assignments, isLoading: isLoadingSettings, assignCamera, swapCameras } = useCameraSettings(devices)
+  const { speak, isReady: isTTSReady, config: ttsConfig, updateConfig: updateTTSConfig } = useTTS()
 
   // Track streams for preview thumbnails
   const [scannerStream, setScannerStream] = useState<MediaStream | null>(null)
@@ -203,6 +207,135 @@ export function Settings() {
             </button>
           </div>
         )}
+      </SettingsSection>
+
+      {/* TTS Settings */}
+      <SettingsSection
+        icon={<Volume2 className="w-5 h-5" />}
+        title="Thông báo giọng nói"
+        description="Cài đặt phản hồi bằng giọng nói khi ghi hình"
+      >
+        <div className="space-y-5">
+          {/* Enable/Disable Toggle */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-surface-200 text-sm font-medium">Bật thông báo giọng nói</p>
+              <p className="text-surface-500 text-xs mt-0.5">Phát giọng nói khi bắt đầu, dừng, hoặc hủy ghi hình</p>
+            </div>
+            <button
+              onClick={() => updateTTSConfig({ enabled: !ttsConfig.enabled })}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+                ttsConfig.enabled ? 'bg-primary-500' : 'bg-surface-700'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  ttsConfig.enabled ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Voice Selector */}
+          <div className={ttsConfig.enabled ? '' : 'opacity-40 pointer-events-none'}>
+            <label className="block text-surface-200 text-sm font-medium mb-2">Giọng nói</label>
+            <div className="relative">
+              <select
+                value={ttsConfig.voiceURI ?? ''}
+                onChange={(e) => updateTTSConfig({ voiceURI: e.target.value || null })}
+                disabled={!ttsConfig.enabled || !isTTSReady}
+                className="w-full bg-surface-800 border border-surface-700 text-surface-200 text-sm rounded-lg px-3 py-2.5 pr-8
+                  appearance-none cursor-pointer transition-colors
+                  hover:border-surface-600 focus:border-primary-500 focus:outline-none
+                  disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <option value="">Tự động (Tiếng Việt)</option>
+                {getVietnameseVoices().length > 0 && (
+                  <optgroup label="Tiếng Việt">
+                    {getVietnameseVoices().map((voice) => (
+                      <option key={voice.voiceURI} value={voice.voiceURI}>
+                        {voice.name} ({voice.lang})
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {getAvailableVoices().filter((v) => !v.lang.startsWith('vi')).length > 0 && (
+                  <optgroup label="Ngôn ngữ khác">
+                    {getAvailableVoices()
+                      .filter((v) => !v.lang.startsWith('vi'))
+                      .map((voice) => (
+                        <option key={voice.voiceURI} value={voice.voiceURI}>
+                          {voice.name} ({voice.lang})
+                        </option>
+                      ))}
+                  </optgroup>
+                )}
+              </select>
+              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-500 pointer-events-none" />
+            </div>
+          </div>
+
+          {/* Rate Slider */}
+          <div className={ttsConfig.enabled ? '' : 'opacity-40 pointer-events-none'}>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-surface-200 text-sm font-medium">Tốc độ giọng nói</label>
+              <span className="text-surface-400 text-xs font-mono">{ttsConfig.rate.toFixed(1)}x</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-surface-500 text-xs">Chậm</span>
+              <input
+                type="range"
+                min="0.5"
+                max="2.0"
+                step="0.1"
+                value={ttsConfig.rate}
+                onChange={(e) => updateTTSConfig({ rate: parseFloat(e.target.value) })}
+                disabled={!ttsConfig.enabled}
+                className="flex-1 h-2 bg-surface-700 rounded-lg appearance-none cursor-pointer
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary-500
+                  [&::-webkit-slider-thumb]:cursor-pointer
+                  disabled:opacity-40 disabled:cursor-not-allowed"
+              />
+              <span className="text-surface-500 text-xs">Nhanh</span>
+            </div>
+          </div>
+
+          {/* Volume Slider */}
+          <div className={ttsConfig.enabled ? '' : 'opacity-40 pointer-events-none'}>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-surface-200 text-sm font-medium">Âm lượng</label>
+              <span className="text-surface-400 text-xs font-mono">{Math.round(ttsConfig.volume * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={ttsConfig.volume}
+              onChange={(e) => updateTTSConfig({ volume: parseFloat(e.target.value) })}
+              disabled={!ttsConfig.enabled}
+              className="w-full h-2 bg-surface-700 rounded-lg appearance-none cursor-pointer
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+                [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary-500
+                [&::-webkit-slider-thumb]:cursor-pointer
+                disabled:opacity-40 disabled:cursor-not-allowed"
+            />
+          </div>
+
+          {/* Test Button */}
+          <div className="pt-2">
+            <button
+              onClick={() => speak('Đây là giọng nói mẫu')}
+              disabled={!ttsConfig.enabled || !isTTSReady}
+              className="w-full px-4 py-2.5 bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium rounded-lg
+                transition-colors cursor-pointer
+                disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-primary-500"
+            >
+              Thử giọng nói
+            </button>
+          </div>
+        </div>
       </SettingsSection>
 
       {/* Placeholder: Storage settings */}
