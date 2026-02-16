@@ -57,11 +57,36 @@ export function initDatabase() {
       file_size INTEGER,
       duration INTEGER,
       status TEXT NOT NULL DEFAULT 'recording',
+      lifecycle_stage TEXT NOT NULL DEFAULT 'active',
+      thumbnail_key TEXT,
+      original_file_size INTEGER,
       started_at INTEGER NOT NULL,
       finished_at INTEGER,
+      archived_at INTEGER,
       created_at INTEGER NOT NULL
     )
   `)
+
+  // ─── Migrations: add columns to existing recordings table ───
+  const migrations: { column: string; sql: string }[] = [
+    { column: 'lifecycle_stage', sql: `ALTER TABLE recordings ADD COLUMN lifecycle_stage TEXT NOT NULL DEFAULT 'active'` },
+    { column: 'thumbnail_key', sql: `ALTER TABLE recordings ADD COLUMN thumbnail_key TEXT` },
+    { column: 'thumbnail_data', sql: `ALTER TABLE recordings ADD COLUMN thumbnail_data TEXT` },
+    { column: 'original_file_size', sql: `ALTER TABLE recordings ADD COLUMN original_file_size INTEGER` },
+    { column: 'archived_at', sql: `ALTER TABLE recordings ADD COLUMN archived_at INTEGER` },
+  ]
+
+  for (const { column, sql } of migrations) {
+    try {
+      // Check if column exists by querying table_info
+      const columns = sqlite.prepare('PRAGMA table_info(recordings)').all() as { name: string }[]
+      if (!columns.some(c => c.name === column)) {
+        sqlite.exec(sql)
+      }
+    } catch {
+      // Column likely already exists, safe to ignore
+    }
+  }
 
   // ─── Default settings ────────────────────────────────────────
   const defaultStoragePath = isDev
@@ -70,10 +95,22 @@ export function initDatabase() {
 
   const storedValue = JSON.stringify(defaultStoragePath)
 
+  const now = Date.now()
+
   sqlite.prepare(`
     INSERT OR IGNORE INTO app_settings (key, value, updated_at)
     VALUES (?, ?, ?)
-  `).run('storage_base_path', storedValue, Date.now())
+  `).run('storage_base_path', storedValue, now)
+
+  sqlite.prepare(`
+    INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+  `).run('archive_after_days', JSON.stringify(14), now)
+
+  sqlite.prepare(`
+    INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+  `).run('lifecycle_enabled', JSON.stringify(true), now)
 
   db = drizzle(sqlite, { schema })
 }

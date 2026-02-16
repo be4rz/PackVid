@@ -48,6 +48,13 @@ function resolveBasePath(): string {
   }
 }
 
+/**
+ * Export for use in other modules (e.g., protocol handler)
+ */
+export function getStorageBasePath(): string {
+  return resolveBasePath()
+}
+
 export function registerStorageHandlers() {
   // ─── Get resolved base path ──────────────────────────────────
   ipcMain.handle('storage:getBasePath', async () => {

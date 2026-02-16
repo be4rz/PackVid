@@ -240,7 +240,12 @@ export function useRecorder(recorderStream: MediaStream | null): UseRecorderRetu
       finishedAt: Date.now(),
     })
 
-    // 6. Build summary
+    // 6. Generate thumbnail (fire-and-forget, non-blocking)
+    window.api.thumbnails.generate(fileKeyRef.current).catch((err: unknown) => {
+      console.error('[useRecorder] Thumbnail generation failed:', err)
+    })
+
+    // 7. Build summary
     const summary: RecordingSummary = {
       id: recordingIdRef.current,
       trackingNumber: trackingNumberRef.current,
@@ -249,7 +254,7 @@ export function useRecorder(recorderStream: MediaStream | null): UseRecorderRetu
       duration: finalDuration,
     }
 
-    // 7. Reset state
+    // 8. Reset state
     mediaRecorderRef.current = null
     setIsRecording(false)
     setIsPaused(false)

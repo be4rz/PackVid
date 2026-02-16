@@ -6,6 +6,7 @@
  * a react-router <Outlet> for page content.
  */
 
+import { useState, useEffect } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Camera, Video, Package, HardDrive,
@@ -16,6 +17,15 @@ import { ThemeToggle } from './ThemeToggle'
 export function AppLayout() {
   const location = useLocation()
   const navigate = useNavigate()
+
+  // Live video count for sidebar badge
+  const [videoCount, setVideoCount] = useState<number | undefined>(undefined)
+
+  useEffect(() => {
+    window.api.recordings.getStats()
+      .then(stats => setVideoCount(stats.totalCount))
+      .catch(() => setVideoCount(undefined))
+  }, [location.pathname])
 
   return (
     <div className="min-h-screen bg-surface-950 flex">
@@ -48,7 +58,7 @@ export function AppLayout() {
               label="Thư viện video"
               active={location.pathname === '/library'}
               onClick={() => navigate('/library')}
-              badge={128}
+              badge={videoCount}
             />
             <NavItem
               icon={<BarChart3 className="w-4.5 h-4.5" />}

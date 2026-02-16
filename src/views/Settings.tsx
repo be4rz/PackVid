@@ -22,6 +22,8 @@ import { useCameraSettings } from '../shared/hooks/useCameraSettings'
 import { useTTS } from '../shared/hooks/useTTS'
 import { getVietnameseVoices, getAvailableVoices } from '../shared/lib/tts'
 import { CameraFeed } from '../shared/components/CameraFeed'
+import { StorageSettings } from '../modules/video-storage/presentation/components/StorageSettings'
+import { LifecycleSettings } from '../modules/video-storage/presentation/components/LifecycleSettings'
 import type { CameraRole } from '../shared/types/camera'
 import { useState, useEffect } from 'react'
 
@@ -338,21 +340,23 @@ export function Settings() {
         </div>
       </SettingsSection>
 
-      {/* Placeholder: Storage settings */}
+      {/* Storage settings */}
       <SettingsSection
         icon={<HardDrive className="w-5 h-5" />}
         title="Lưu trữ"
         description="Quản lý vị trí lưu video và dung lượng"
-        placeholder
-      />
+      >
+        <StorageSettings />
+      </SettingsSection>
 
-      {/* Placeholder: Video lifecycle */}
+      {/* Video lifecycle */}
       <SettingsSection
         icon={<Clock className="w-5 h-5" />}
         title="Vòng đời video"
-        description="Cài đặt tự động xóa video cũ"
-        placeholder
-      />
+        description="Tự động nén video cũ để tiết kiệm dung lượng"
+      >
+        <LifecycleSettings />
+      </SettingsSection>
     </div>
   )
 }

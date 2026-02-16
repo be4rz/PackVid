@@ -47,7 +47,12 @@ export const recordings = sqliteTable('recordings', {
   fileSize: integer('file_size'),                                    // bytes (updated after recording)
   duration: integer('duration'),                                     // seconds (updated after recording)
   status: text('status').notNull().default('recording'),             // 'recording' | 'saved' | 'failed'
+  lifecycleStage: text('lifecycle_stage').notNull().default('active'), // 'active' | 'archived'
+  thumbnailKey: text('thumbnail_key'),                               // DEPRECATED: "2026/02/15/SPXVN061116275422.jpg"
+  thumbnailData: text('thumbnail_data'),                             // base64 data URI: "data:image/jpeg;base64,..."
+  originalFileSize: integer('original_file_size'),                   // bytes before compression
   startedAt: integer('started_at', { mode: 'timestamp' }).notNull(),
   finishedAt: integer('finished_at', { mode: 'timestamp' }),
+  archivedAt: integer('archived_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 })

@@ -9,6 +9,7 @@ import { HashRouter, Routes, Route } from 'react-router-dom'
 import { AppLayout } from './shared/components/AppLayout'
 import { RecordingView } from './views/RecordingView'
 import { Settings } from './views/Settings'
+import { VideoLibraryView } from './modules/video-library/presentation/VideoLibraryView'
 
 function App() {
   return (
@@ -17,8 +18,7 @@ function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<RecordingView />} />
           <Route path="/settings" element={<Settings />} />
-          {/* Future routes */}
-          <Route path="/library" element={<PlaceholderView title="Thư viện video" />} />
+          <Route path="/library" element={<VideoLibraryView />} />
           <Route path="/stats" element={<PlaceholderView title="Thống kê" />} />
         </Route>
       </Routes>

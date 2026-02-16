@@ -6,6 +6,10 @@ import { initDatabase } from './db'
 import { registerSettingsHandlers } from './ipc/settings'
 import { registerStorageHandlers } from './ipc/storage'
 import { registerRecordingsHandlers } from './ipc/recordings'
+import { registerThumbnailHandlers } from './ipc/thumbnails'
+import { registerLifecycleHandlers } from './ipc/lifecycle'
+import { startLifecycleScheduler } from './lifecycle-scheduler'
+import { registerMediaProtocol } from './protocol'
 
 const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -35,6 +39,8 @@ function createWindow() {
     icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
     },
   })
 
@@ -71,9 +77,12 @@ app.on('activate', () => {
 
 app.whenReady().then(async () => {
   initDatabase()
+  registerMediaProtocol()  // ← Register custom protocol BEFORE creating windows
   registerSettingsHandlers()
   registerStorageHandlers()
   registerRecordingsHandlers()
+  registerThumbnailHandlers()
+  registerLifecycleHandlers()
 
   // Request camera permission on macOS (triggers native dialog on first launch)
   if (process.platform === 'darwin') {
@@ -81,4 +90,5 @@ app.whenReady().then(async () => {
   }
 
   createWindow()
+  startLifecycleScheduler()
 })

@@ -63,8 +63,13 @@ interface Window {
         fileSize: number | null
         duration: number | null
         status: string
+        lifecycleStage: string
+        thumbnailKey: string | null
+        thumbnailData: string | null
+        originalFileSize: number | null
         startedAt: number
         finishedAt: number | null
+        archivedAt: number | null
         createdAt: number
       } | null>
       getAll: (options?: { page?: number; limit?: number }) => Promise<Array<{
@@ -75,8 +80,13 @@ interface Window {
         fileSize: number | null
         duration: number | null
         status: string
+        lifecycleStage: string
+        thumbnailKey: string | null
+        thumbnailData: string | null
+        originalFileSize: number | null
         startedAt: number
         finishedAt: number | null
+        archivedAt: number | null
         createdAt: number
       }>>
       delete: (id: string) => Promise<{ fileKey: string } | null>
@@ -88,10 +98,65 @@ interface Window {
         fileSize: number | null
         duration: number | null
         status: string
+        lifecycleStage: string
+        thumbnailKey: string | null
+        thumbnailData: string | null
+        originalFileSize: number | null
         startedAt: number
         finishedAt: number | null
+        archivedAt: number | null
         createdAt: number
       } | null>
+      search: (filters: {
+        dateFrom?: number
+        dateTo?: number
+        carrier?: string
+        trackingNumber?: string
+        lifecycleStage?: string
+        sortBy?: 'createdAt' | 'fileSize' | 'duration'
+        sortOrder?: 'asc' | 'desc'
+        limit?: number
+        offset?: number
+      }) => Promise<{
+        recordings: Array<{
+          id: string
+          trackingNumber: string
+          carrier: string | null
+          fileKey: string
+          fileSize: number | null
+          duration: number | null
+          status: string
+          lifecycleStage: string
+          thumbnailKey: string | null
+          thumbnailData: string | null
+          originalFileSize: number | null
+          startedAt: number
+          finishedAt: number | null
+          archivedAt: number | null
+          createdAt: number
+        }>
+        total: number
+      }>
+      getStats: () => Promise<{
+        totalSize: number
+        activeSize: number
+        archivedSize: number
+        totalCount: number
+        activeCount: number
+        archivedCount: number
+        spaceSaved: number
+      }>
+    }
+    thumbnails: {
+      generate: (fileKey: string) => Promise<string>
+    }
+    lifecycle: {
+      compressVideo: (data: { recordingId: string; fileKey: string }) => Promise<{
+        newFileKey: string
+        newFileSize: number
+        originalFileSize: number
+      }>
+      getProgress: (recordingId: string) => Promise<number | null>
     }
   }
 }

@@ -11,10 +11,12 @@
  * - recordings:getAll       — Paginated list (for video library later)
  * - recordings:delete       — Delete recording row + associated file
  * - recordings:getByTracking — Find recording by tracking number
+ * - recordings:search        — Search with filters, sorting, pagination
+ * - recordings:getStats      — Aggregated storage statistics
  */
 
 import { ipcMain } from 'electron'
-import { eq, desc } from 'drizzle-orm'
+import { eq, desc, asc, and, gte, lte, like, sql } from 'drizzle-orm'
 import { getDb } from '../db'
 import { recordings } from '../../src/db/schema'
 
@@ -27,6 +29,19 @@ interface CreateRecordingDTO {
   status?: string
   startedAt: number   // Unix timestamp (ms)
   createdAt: number    // Unix timestamp (ms)
+}
+
+/** DTO for search filters */
+interface SearchFiltersDTO {
+  dateFrom?: number     // Unix timestamp (ms)
+  dateTo?: number       // Unix timestamp (ms)
+  carrier?: string
+  trackingNumber?: string
+  lifecycleStage?: string
+  sortBy?: 'createdAt' | 'fileSize' | 'duration'
+  sortOrder?: 'asc' | 'desc'
+  limit?: number
+  offset?: number
 }
 
 /** DTO for updating a recording */
@@ -130,6 +145,104 @@ export function registerRecordingsHandlers() {
     if (rows.length === 0) return null
     return serializeRow(rows[0])
   })
+
+  // ─── Search recordings with filters ─────────────────────────
+  ipcMain.handle('recordings:search', async (_event, filters: SearchFiltersDTO) => {
+    const db = getDb()
+    const conditions = []
+
+    // Only show saved recordings by default
+    conditions.push(eq(recordings.status, 'saved'))
+
+    if (filters.carrier) {
+      conditions.push(eq(recordings.carrier, filters.carrier))
+    }
+    if (filters.trackingNumber) {
+      conditions.push(like(recordings.trackingNumber, `%${filters.trackingNumber}%`))
+    }
+    if (filters.lifecycleStage) {
+      conditions.push(eq(recordings.lifecycleStage, filters.lifecycleStage))
+    }
+    if (filters.dateFrom) {
+      conditions.push(gte(recordings.createdAt, new Date(filters.dateFrom)))
+    }
+    if (filters.dateTo) {
+      conditions.push(lte(recordings.createdAt, new Date(filters.dateTo)))
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined
+
+    // Sorting
+    const sortColumn = filters.sortBy === 'fileSize' ? recordings.fileSize
+      : filters.sortBy === 'duration' ? recordings.duration
+      : recordings.createdAt
+    const orderFn = filters.sortOrder === 'asc' ? asc : desc
+
+    // Count total
+    const countResult = db.select({ count: sql<number>`count(*)` })
+      .from(recordings)
+      .where(whereClause)
+      .all()
+    const total = countResult[0]?.count ?? 0
+
+    // Fetch page
+    const limit = filters.limit ?? 50
+    const offset = filters.offset ?? 0
+
+    const rows = db.select().from(recordings)
+      .where(whereClause)
+      .orderBy(orderFn(sortColumn))
+      .limit(limit)
+      .offset(offset)
+      .all()
+
+    return { recordings: rows.map(serializeRow), total }
+  })
+
+  // ─── Get aggregated storage statistics ──────────────────────
+  ipcMain.handle('recordings:getStats', async () => {
+    const db = getDb()
+
+    const rows = db.select({
+      lifecycleStage: recordings.lifecycleStage,
+      count: sql<number>`count(*)`,
+      totalSize: sql<number>`coalesce(sum(${recordings.fileSize}), 0)`,
+      totalOriginalSize: sql<number>`coalesce(sum(${recordings.originalFileSize}), 0)`,
+    })
+      .from(recordings)
+      .where(eq(recordings.status, 'saved'))
+      .groupBy(recordings.lifecycleStage)
+      .all()
+
+    let totalSize = 0
+    let activeSize = 0
+    let archivedSize = 0
+    let activeCount = 0
+    let archivedCount = 0
+    let spaceSaved = 0
+
+    for (const row of rows) {
+      totalSize += row.totalSize
+      if (row.lifecycleStage === 'archived') {
+        archivedSize += row.totalSize
+        archivedCount += row.count
+        spaceSaved += row.totalOriginalSize - row.totalSize
+      } else {
+        activeSize += row.totalSize
+        activeCount += row.count
+      }
+    }
+
+    return {
+      totalSize,
+      activeSize,
+      archivedSize,
+      totalCount: activeCount + archivedCount,
+      activeCount,
+      archivedCount,
+      spaceSaved,
+    }
+  })
 }
 
 /**
@@ -145,8 +258,13 @@ function serializeRow(row: typeof recordings.$inferSelect) {
     fileSize: row.fileSize,
     duration: row.duration,
     status: row.status,
+    lifecycleStage: row.lifecycleStage,
+    thumbnailKey: row.thumbnailKey,
+    thumbnailData: row.thumbnailData,
+    originalFileSize: row.originalFileSize,
     startedAt: row.startedAt instanceof Date ? row.startedAt.getTime() : row.startedAt,
     finishedAt: row.finishedAt instanceof Date ? row.finishedAt.getTime() : row.finishedAt,
+    archivedAt: row.archivedAt instanceof Date ? row.archivedAt.getTime() : row.archivedAt,
     createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : row.createdAt,
   }
 }

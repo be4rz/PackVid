@@ -61,5 +61,29 @@ contextBridge.exposeInMainWorld('api', {
     delete: (id: string) => ipcRenderer.invoke('recordings:delete', id),
     getByTracking: (trackingNumber: string) =>
       ipcRenderer.invoke('recordings:getByTracking', trackingNumber),
+    search: (filters: {
+      dateFrom?: number
+      dateTo?: number
+      carrier?: string
+      trackingNumber?: string
+      lifecycleStage?: string
+      sortBy?: 'createdAt' | 'fileSize' | 'duration'
+      sortOrder?: 'asc' | 'desc'
+      limit?: number
+      offset?: number
+    }) => ipcRenderer.invoke('recordings:search', filters),
+    getStats: () => ipcRenderer.invoke('recordings:getStats'),
+  },
+
+  thumbnails: {
+    generate: (fileKey: string) =>
+      ipcRenderer.invoke('thumbnails:generate', fileKey),
+  },
+
+  lifecycle: {
+    compressVideo: (data: { recordingId: string; fileKey: string }) =>
+      ipcRenderer.invoke('lifecycle:compressVideo', data),
+    getProgress: (recordingId: string) =>
+      ipcRenderer.invoke('lifecycle:getProgress', recordingId),
   },
 })
