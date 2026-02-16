@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('api', {
     finalize: (fileKey: string) => ipcRenderer.invoke('storage:finalize', fileKey),
     deleteFile: (fileKey: string) => ipcRenderer.invoke('storage:deleteFile', fileKey),
     getFullPath: (fileKey: string) => ipcRenderer.invoke('storage:getFullPath', fileKey),
+    pickFolder: () => ipcRenderer.invoke('storage:pickFolder') as Promise<string | null>,
   },
 
   recordings: {
@@ -64,6 +65,8 @@ contextBridge.exposeInMainWorld('api', {
     search: (filters: {
       dateFrom?: number
       dateTo?: number
+      durationMin?: number
+      durationMax?: number
       carrier?: string
       trackingNumber?: string
       lifecycleStage?: string

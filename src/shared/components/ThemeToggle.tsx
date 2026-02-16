@@ -5,7 +5,7 @@ import { useTheme, type Theme } from '../hooks/useTheme'
  * Three-option theme toggle: Light / System / Dark.
  * Uses Lucide icons. Active option is highlighted with primary color.
  */
-export function ThemeToggle() {
+export function ThemeToggle(_props: { compact?: boolean } = {}) {
   const { theme, setTheme } = useTheme()
 
   const options: { value: Theme; icon: React.ReactNode; label: string }[] = [

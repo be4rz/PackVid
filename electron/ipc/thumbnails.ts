@@ -106,7 +106,7 @@ export async function generateThumbnailData(videoPath: string): Promise<string> 
 export function registerThumbnailHandlers() {
   ipcMain.handle('thumbnails:generate', async (_event, fileKey: string): Promise<string> => {
     const basePath = resolveBasePath()
-    const videoPath = path.join(basePath, fileKey)
+    const videoPath = path.isAbsolute(fileKey) ? fileKey : path.join(basePath, fileKey)
 
     const dataUri = await generateThumbnailData(videoPath)
 

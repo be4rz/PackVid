@@ -1,12 +1,12 @@
 /**
  * VideoLibraryToolbar — Search, filter, and sort controls
  *
- * Renders a search input (debounced 300ms), carrier/lifecycle/sort dropdowns,
- * and a clear filters button. All filter changes trigger the useVideoLibrary hook.
+ * Renders a search input (debounced 300ms), carrier/lifecycle/sort/duration dropdowns,
+ * date range inputs, and a clear filters button.
  */
 
 import { useState, useEffect, useRef } from 'react'
-import { Search, X, ChevronDown } from 'lucide-react'
+import { Search, X, ChevronDown, Calendar } from 'lucide-react'
 import type { VideoLibraryFilters } from '../hooks/useVideoLibrary'
 
 /** Sort option labels (Vietnamese) */
@@ -17,6 +17,15 @@ const SORT_OPTIONS: { label: string; sortBy: VideoLibraryFilters['sortBy']; sort
   { label: 'Nhỏ nhất', sortBy: 'fileSize', sortOrder: 'asc' },
   { label: 'Dài nhất', sortBy: 'duration', sortOrder: 'desc' },
   { label: 'Ngắn nhất', sortBy: 'duration', sortOrder: 'asc' },
+]
+
+/** Duration preset options (Vietnamese, values in ms) */
+const DURATION_PRESETS: { label: string; min: number | null; max: number | null }[] = [
+  { label: 'Thời lượng', min: null, max: null },
+  { label: '< 1 phút', min: null, max: 60_000 },
+  { label: '1–3 phút', min: 60_000, max: 180_000 },
+  { label: '3–5 phút', min: 180_000, max: 300_000 },
+  { label: '> 5 phút', min: 300_000, max: null },
 ]
 
 interface VideoLibraryToolbarProps {
@@ -66,8 +75,19 @@ export function VideoLibraryToolbar({
     }
   }
 
+  // Duration preset key
+  const currentDurationKey = `${filters.durationMin ?? 'null'}-${filters.durationMax ?? 'null'}`
+
+  function handleDurationChange(key: string) {
+    const preset = DURATION_PRESETS.find(p => `${p.min ?? 'null'}-${p.max ?? 'null'}` === key)
+    if (preset) {
+      onUpdateFilters({ durationMin: preset.min, durationMax: preset.max })
+    }
+  }
+
   return (
     <div className="bg-surface-900 border border-surface-800 rounded-xl p-4 mb-4">
+      {/* Row 1: Search + filters */}
       <div className="flex flex-wrap items-center gap-3">
         {/* Search input */}
         <div className="flex-1 min-w-[200px] relative">
@@ -106,6 +126,16 @@ export function VideoLibraryToolbar({
           ]}
         />
 
+        {/* Duration filter */}
+        <FilterSelect
+          value={currentDurationKey}
+          onChange={handleDurationChange}
+          options={DURATION_PRESETS.map(p => ({
+            value: `${p.min ?? 'null'}-${p.max ?? 'null'}`,
+            label: p.label,
+          }))}
+        />
+
         {/* Sort */}
         <FilterSelect
           value={currentSortKey}
@@ -128,9 +158,30 @@ export function VideoLibraryToolbar({
         )}
       </div>
 
-      {/* Result count */}
-      <div className="mt-3 flex items-center">
-        <span className="text-surface-500 text-xs">
+      {/* Row 2: Date range */}
+      <div className="flex flex-wrap items-center gap-3 mt-3">
+        <div className="flex items-center gap-2">
+          <Calendar className="w-4 h-4 text-surface-500" />
+          <span className="text-surface-400 text-xs">Từ ngày</span>
+          <input
+            type="date"
+            value={filters.dateFrom}
+            onChange={(e) => onUpdateFilters({ dateFrom: e.target.value })}
+            className="bg-surface-800 border border-surface-700 text-surface-200 text-sm rounded-lg px-3 py-1.5
+              transition-colors hover:border-surface-600 focus:border-primary-500 focus:outline-none cursor-pointer"
+          />
+          <span className="text-surface-400 text-xs">đến</span>
+          <input
+            type="date"
+            value={filters.dateTo}
+            onChange={(e) => onUpdateFilters({ dateTo: e.target.value })}
+            className="bg-surface-800 border border-surface-700 text-surface-200 text-sm rounded-lg px-3 py-1.5
+              transition-colors hover:border-surface-600 focus:border-primary-500 focus:outline-none cursor-pointer"
+          />
+        </div>
+
+        {/* Result count */}
+        <span className="text-surface-500 text-xs ml-auto">
           Tìm thấy {total} video
         </span>
       </div>

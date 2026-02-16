@@ -14,3 +14,12 @@ export function formatFileSize(bytes: number): string {
 
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${UNITS[index]}`
 }
+
+/** Format milliseconds as M:SS (e.g. 1:28) */
+export function formatDuration(ms?: number): string {
+  if (ms == null) return '—'
+  const totalSeconds = Math.round(ms / 1000)
+  const m = Math.floor(totalSeconds / 60)
+  const s = totalSeconds % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}

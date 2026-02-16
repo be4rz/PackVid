@@ -45,7 +45,7 @@ export const recordings = sqliteTable('recordings', {
   carrier: text('carrier'),                                          // 'SPX' | 'GHN' | 'GHTK'
   fileKey: text('file_key').notNull(),                               // "2026/02/15/SPXVN061116275422.webm"
   fileSize: integer('file_size'),                                    // bytes (updated after recording)
-  duration: integer('duration'),                                     // seconds (updated after recording)
+  duration: integer('duration'),                                     // milliseconds (updated after recording)
   status: text('status').notNull().default('recording'),             // 'recording' | 'saved' | 'failed'
   lifecycleStage: text('lifecycle_stage').notNull().default('active'), // 'active' | 'archived'
   thumbnailKey: text('thumbnail_key'),                               // DEPRECATED: "2026/02/15/SPXVN061116275422.jpg"

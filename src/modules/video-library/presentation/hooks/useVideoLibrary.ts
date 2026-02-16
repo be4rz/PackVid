@@ -19,6 +19,8 @@ export interface VideoLibraryFilters {
   lifecycleStage: string   // '' = all
   dateFrom: string         // ISO date string or ''
   dateTo: string           // ISO date string or ''
+  durationMin: number | null  // milliseconds
+  durationMax: number | null  // milliseconds
   sortBy: 'createdAt' | 'fileSize' | 'duration'
   sortOrder: 'asc' | 'desc'
 }
@@ -29,6 +31,8 @@ const DEFAULT_FILTERS: VideoLibraryFilters = {
   lifecycleStage: '',
   dateFrom: '',
   dateTo: '',
+  durationMin: null,
+  durationMax: null,
   sortBy: 'createdAt',
   sortOrder: 'desc',
 }
@@ -92,6 +96,8 @@ export function useVideoLibrary() {
         lifecycleStage: currentFilters.lifecycleStage || undefined,
         dateFrom: currentFilters.dateFrom ? new Date(currentFilters.dateFrom).getTime() : undefined,
         dateTo: currentFilters.dateTo ? new Date(currentFilters.dateTo).getTime() : undefined,
+        durationMin: currentFilters.durationMin ?? undefined,
+        durationMax: currentFilters.durationMax ?? undefined,
         sortBy: currentFilters.sortBy,
         sortOrder: currentFilters.sortOrder,
         limit: currentPageSize,
@@ -139,7 +145,9 @@ export function useVideoLibrary() {
     filters.carrier !== '' ||
     filters.lifecycleStage !== '' ||
     filters.dateFrom !== '' ||
-    filters.dateTo !== ''
+    filters.dateTo !== '' ||
+    filters.durationMin !== null ||
+    filters.durationMax !== null
 
   // ─── Pagination actions ───────────────────────────────────
 

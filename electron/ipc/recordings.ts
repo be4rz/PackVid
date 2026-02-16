@@ -15,10 +15,12 @@
  * - recordings:getStats      — Aggregated storage statistics
  */
 
+import path from 'node:path'
 import { ipcMain } from 'electron'
 import { eq, desc, asc, and, gte, lte, like, sql } from 'drizzle-orm'
 import { getDb } from '../db'
 import { recordings } from '../../src/db/schema'
+import { getStorageBasePath } from './storage'
 
 /** DTO for creating a new recording */
 interface CreateRecordingDTO {
@@ -35,6 +37,8 @@ interface CreateRecordingDTO {
 interface SearchFiltersDTO {
   dateFrom?: number     // Unix timestamp (ms)
   dateTo?: number       // Unix timestamp (ms)
+  durationMin?: number  // milliseconds
+  durationMax?: number  // milliseconds
   carrier?: string
   trackingNumber?: string
   lifecycleStage?: string
@@ -56,12 +60,17 @@ export function registerRecordingsHandlers() {
   // ─── Create a new recording ──────────────────────────────────
   ipcMain.handle('recordings:create', async (_event, data: CreateRecordingDTO) => {
     const db = getDb()
+    // Store absolute path so old recordings remain accessible after path changes
+    const absoluteFileKey = path.isAbsolute(data.fileKey)
+      ? data.fileKey
+      : path.join(getStorageBasePath(), data.fileKey)
+
     db.insert(recordings)
       .values({
         id: data.id,
         trackingNumber: data.trackingNumber,
         carrier: data.carrier ?? null,
-        fileKey: data.fileKey,
+        fileKey: absoluteFileKey,
         status: data.status ?? 'recording',
         startedAt: new Date(data.startedAt),
         createdAt: new Date(data.createdAt),
@@ -169,6 +178,12 @@ export function registerRecordingsHandlers() {
     if (filters.dateTo) {
       conditions.push(lte(recordings.createdAt, new Date(filters.dateTo)))
     }
+    if (filters.durationMin != null) {
+      conditions.push(gte(recordings.duration, filters.durationMin))
+    }
+    if (filters.durationMax != null) {
+      conditions.push(lte(recordings.duration, filters.durationMax))
+    }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined
 
@@ -207,7 +222,7 @@ export function registerRecordingsHandlers() {
       lifecycleStage: recordings.lifecycleStage,
       count: sql<number>`count(*)`,
       totalSize: sql<number>`coalesce(sum(${recordings.fileSize}), 0)`,
-      totalOriginalSize: sql<number>`coalesce(sum(${recordings.originalFileSize}), 0)`,
+      spaceSaved: sql<number>`coalesce(sum(CASE WHEN ${recordings.originalFileSize} IS NOT NULL THEN ${recordings.originalFileSize} - ${recordings.fileSize} ELSE 0 END), 0)`,
     })
       .from(recordings)
       .where(eq(recordings.status, 'saved'))
@@ -226,7 +241,7 @@ export function registerRecordingsHandlers() {
       if (row.lifecycleStage === 'archived') {
         archivedSize += row.totalSize
         archivedCount += row.count
-        spaceSaved += row.totalOriginalSize - row.totalSize
+        spaceSaved += row.spaceSaved
       } else {
         activeSize += row.totalSize
         activeCount += row.count

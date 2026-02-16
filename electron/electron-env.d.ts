@@ -38,6 +38,7 @@ interface Window {
       finalize: (fileKey: string) => Promise<{ fileSize: number }>
       deleteFile: (fileKey: string) => Promise<void>
       getFullPath: (fileKey: string) => Promise<string>
+      pickFolder: () => Promise<string | null>
     }
     recordings: {
       create: (data: {
@@ -110,6 +111,8 @@ interface Window {
       search: (filters: {
         dateFrom?: number
         dateTo?: number
+        durationMin?: number
+        durationMax?: number
         carrier?: string
         trackingNumber?: string
         lifecycleStage?: string

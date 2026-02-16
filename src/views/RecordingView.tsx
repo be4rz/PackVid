@@ -12,6 +12,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Video, Clock, ChevronRight,
   Scan, CheckCircle2, Package,
@@ -20,7 +21,6 @@ import {
   Truck, QrCode, History,
   Circle, Square, X, Timer,
 } from 'lucide-react'
-import { ProductList } from '../modules/_example/presentation/components/ProductList'
 import { CameraFeed } from '../shared/components/CameraFeed'
 import { useCamera } from '../shared/hooks/useCamera'
 import { useCameraSettings } from '../shared/hooks/useCameraSettings'
@@ -28,6 +28,7 @@ import { useQRScanner } from '../modules/qr-scanner/presentation/hooks/useQRScan
 import { useRecorder } from '../modules/recording/presentation/hooks/useRecorder'
 import { useTTS } from '../shared/hooks/useTTS'
 import { playBeep } from '../shared/lib/audio'
+import { formatFileSize, formatDuration } from '../shared/lib/format'
 import type { ScannedOrder, Carrier } from '../modules/qr-scanner/domain/entities/ScannedOrder'
 import type { CameraStatus } from '../shared/types/camera'
 
@@ -47,6 +48,7 @@ const TTS_MESSAGES = {
 }
 
 export function RecordingView() {
+  const navigate = useNavigate()
   const {
     devices,
     permission,
@@ -81,6 +83,8 @@ export function RecordingView() {
   const autoTriggerRef = useRef<((order: ScannedOrder) => void) | null>(null)
 
   const handleScan = useCallback((order: ScannedOrder) => {
+    // Suppress beep for same QR during active recording
+    if (currentTrackingRef.current === order.trackingNumber && currentTrackingRef.current !== null) return
     playBeep()
     autoTriggerRef.current?.(order)
   }, [])
@@ -116,6 +120,56 @@ export function RecordingView() {
   // ─── Max duration auto-stop ────────────────────────────────
   const [maxDurationSeconds, setMaxDurationSeconds] = useState(600)
   const [showMaxDurationToast, setShowMaxDurationToast] = useState(false)
+
+  // ─── Real-time stats & recent videos ──────────────────────
+  const [todayStats, setTodayStats] = useState<{ todayCount: number; avgDuration: number; totalCount: number }>({
+    todayCount: 0, avgDuration: 0, totalCount: 0,
+  })
+  const [recentVideos, setRecentVideos] = useState<Array<{
+    id: string; trackingNumber: string; createdAt: number
+    duration: number | null; fileSize: number | null; status: string
+  }>>([])
+
+  const fetchRecentData = useCallback(async () => {
+    try {
+      const startOfToday = new Date()
+      startOfToday.setHours(0, 0, 0, 0)
+
+      const [todayResult, recentResult, statsResult] = await Promise.all([
+        window.api.recordings.search({
+          dateFrom: startOfToday.getTime(),
+          sortBy: 'createdAt',
+          sortOrder: 'desc',
+          limit: 100,
+        }),
+        window.api.recordings.search({
+          sortBy: 'createdAt',
+          sortOrder: 'desc',
+          limit: 5,
+        }),
+        window.api.recordings.getStats(),
+      ])
+
+      const todayRecs = todayResult.recordings
+      const avgDur = todayRecs.length > 0
+        ? todayRecs.reduce((sum, r) => sum + (r.duration ?? 0), 0) / todayRecs.length
+        : 0
+
+      setTodayStats({
+        todayCount: todayRecs.length,
+        avgDuration: avgDur,
+        totalCount: statsResult.totalCount,
+      })
+      setRecentVideos(recentResult.recordings)
+    } catch (err) {
+      console.error('[RecordingView] Failed to fetch recent data:', err)
+    }
+  }, [])
+
+  // Fetch on mount and after recording stops
+  useEffect(() => {
+    fetchRecentData()
+  }, [fetchRecentData, isRecording])
 
   // Load max duration from settings on mount
   useEffect(() => {
@@ -271,10 +325,12 @@ export function RecordingView() {
 
   useEffect(() => {
     if (!lastScan) return
+    // Suppress flash for same QR during recording
+    if (isRecording && lastScan.trackingNumber === currentTrackingRef.current) return
     setShowScanFlash(true)
     const timer = setTimeout(() => setShowScanFlash(false), 600)
     return () => clearTimeout(timer)
-  }, [lastScan])
+  }, [lastScan, isRecording])
 
   // Callback to receive scanner video element from CameraFeed
   const handleScannerVideoRef = useCallback((el: HTMLVideoElement | null) => {
@@ -500,33 +556,26 @@ export function RecordingView() {
       )}
 
       {/* Stats row */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-3 gap-4 mb-6">
         <StatCard
           icon={<Video className="w-5 h-5" />}
           label="Hôm nay"
-          value="24"
+          value={String(todayStats.todayCount)}
           subtitle="video đã quay"
           color="primary"
         />
         <StatCard
-          icon={<CheckCircle2 className="w-5 h-5" />}
-          label="Thành công"
-          value="98%"
-          subtitle="tỉ lệ hoàn thành"
+          icon={<Clock className="w-5 h-5" />}
+          label="Trung bình"
+          value={formatDuration(todayStats.avgDuration)}
+          subtitle="thời gian / video"
           color="success"
         />
         <StatCard
-          icon={<Clock className="w-5 h-5" />}
-          label="Trung bình"
-          value="1:42"
-          subtitle="thời gian / video"
-          color="primary"
-        />
-        <StatCard
-          icon={<AlertTriangle className="w-5 h-5" />}
-          label="Sắp hết hạn"
-          value="12"
-          subtitle="video (7 ngày)"
+          icon={<Package className="w-5 h-5" />}
+          label="Tổng cộng"
+          value={String(todayStats.totalCount)}
+          subtitle="video đã lưu"
           color="warning"
         />
       </div>
@@ -535,22 +584,34 @@ export function RecordingView() {
       <div className="bg-surface-900 rounded-xl border border-surface-800">
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-800">
           <h3 className="text-surface-100 font-semibold text-sm">Video gần đây</h3>
-          <button className="text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1 cursor-pointer transition-colors">
+          <button
+            onClick={() => navigate('/library')}
+            className="text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1 cursor-pointer transition-colors"
+          >
             Xem tất cả <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
         <div className="divide-y divide-surface-800">
-          <RecordingRow orderId="SPXVN042891523" time="14:32" duration="1:28" size="45.2 MB" status="saved" />
-          <RecordingRow orderId="SPXVN042891498" time="14:29" duration="2:15" size="68.1 MB" status="saved" />
-          <RecordingRow orderId="SPXVN042891467" time="14:25" duration="0:55" size="28.7 MB" status="saved" />
-          <RecordingRow orderId="SPXVN042891443" time="14:21" duration="1:42" size="52.3 MB" status="expired_soon" />
-          <RecordingRow orderId="SPXVN042891412" time="14:17" duration="1:18" size="39.8 MB" status="saved" />
+          {recentVideos.length === 0 ? (
+            <div className="px-5 py-6 text-center text-surface-500 text-sm">
+              Chưa có video nào
+            </div>
+          ) : (
+            recentVideos.map(rec => {
+              const time = new Date(rec.createdAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+              return (
+                <RecordingRow
+                  key={rec.id}
+                  orderId={rec.trackingNumber}
+                  time={time}
+                  duration={formatDuration(rec.duration ?? undefined)}
+                  size={rec.fileSize ? formatFileSize(rec.fileSize) : '—'}
+                  status="saved"
+                />
+              )
+            })
+          )}
         </div>
-      </div>
-
-      {/* Clean Architecture Example Module */}
-      <div className="mt-6">
-        <ProductList />
       </div>
 
       {/* Duplicate tracking dialog */}

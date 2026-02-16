@@ -19,7 +19,7 @@
 
 import path from 'node:path'
 import fs from 'node:fs'
-import { ipcMain } from 'electron'
+import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db'
 import { appSettings } from '../../src/db/schema'
@@ -76,8 +76,7 @@ export function registerStorageHandlers() {
 
   // ─── Ensure directory exists for a file key ──────────────────
   ipcMain.handle('storage:ensureDir', async (_event, fileKey: string) => {
-    const basePath = resolveBasePath()
-    const fullPath = path.join(basePath, fileKey)
+    const fullPath = path.isAbsolute(fileKey) ? fileKey : path.join(resolveBasePath(), fileKey)
     const dir = path.dirname(fullPath)
 
     if (!fs.existsSync(dir)) {
@@ -90,8 +89,7 @@ export function registerStorageHandlers() {
     let stream = activeStreams.get(fileKey)
 
     if (!stream) {
-      const basePath = resolveBasePath()
-      const fullPath = path.join(basePath, fileKey)
+      const fullPath = path.isAbsolute(fileKey) ? fileKey : path.join(resolveBasePath(), fileKey)
       const dir = path.dirname(fullPath)
 
       // Ensure directory exists
@@ -127,8 +125,7 @@ export function registerStorageHandlers() {
     }
 
     // Get file stats
-    const basePath = resolveBasePath()
-    const fullPath = path.join(basePath, fileKey)
+    const fullPath = path.isAbsolute(fileKey) ? fileKey : path.join(resolveBasePath(), fileKey)
 
     if (fs.existsSync(fullPath)) {
       const stats = fs.statSync(fullPath)
@@ -147,8 +144,7 @@ export function registerStorageHandlers() {
       activeStreams.delete(fileKey)
     }
 
-    const basePath = resolveBasePath()
-    const fullPath = path.join(basePath, fileKey)
+    const fullPath = path.isAbsolute(fileKey) ? fileKey : path.join(resolveBasePath(), fileKey)
 
     if (fs.existsSync(fullPath)) {
       fs.unlinkSync(fullPath)
@@ -157,7 +153,19 @@ export function registerStorageHandlers() {
 
   // ─── Resolve file_key to absolute path ───────────────────────
   ipcMain.handle('storage:getFullPath', async (_event, fileKey: string) => {
+    if (path.isAbsolute(fileKey)) return fileKey
     const basePath = resolveBasePath()
     return path.join(basePath, fileKey)
+  })
+
+  // ─── Pick folder dialog ────────────────────────────────────────
+  ipcMain.handle('storage:pickFolder', async () => {
+    const win = BrowserWindow.getFocusedWindow()
+    const result = await dialog.showOpenDialog(win!, {
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Chọn thư mục lưu trữ video',
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
   })
 }

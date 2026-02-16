@@ -139,7 +139,7 @@ export function useRecorder(recorderStream: MediaStream | null): UseRecorderRetu
       throw new Error('No recorder stream available')
     }
 
-    if (isRecording) {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       throw new Error('Already recording')
     }
 
@@ -206,7 +206,7 @@ export function useRecorder(recorderStream: MediaStream | null): UseRecorderRetu
 
     // 7. Start duration timer
     startTimer()
-  }, [recorderStream, isRecording, startTimer])
+  }, [recorderStream, startTimer])
 
   // ─── Stop recording ───────────────────────────────────────
   const stopRecording = useCallback(async (): Promise<RecordingSummary> => {
@@ -227,10 +227,8 @@ export function useRecorder(recorderStream: MediaStream | null): UseRecorderRetu
     // 3. Finalize file — close stream, get file size
     const { fileSize } = await window.api.storage.finalize(fileKeyRef.current)
 
-    // 4. Calculate final duration
-    const finalDuration = Math.floor(
-      (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000
-    )
+    // 4. Calculate final duration (milliseconds)
+    const finalDuration = Date.now() - startTimeRef.current - pausedDurationRef.current
 
     // 5. Update DB row
     await window.api.recordings.update(recordingIdRef.current, {

@@ -29,6 +29,11 @@ function resolveBasePath(): string {
   }
 }
 
+/** Resolve a fileKey to an absolute path (handles both absolute and legacy relative keys) */
+function resolveFilePath(basePath: string, fileKey: string): string {
+  return path.isAbsolute(fileKey) ? fileKey : path.join(basePath, fileKey)
+}
+
 /** Convert a .webm fileKey to its compressed .mp4 fileKey */
 function toCompressedKey(fileKey: string): string {
   return fileKey.replace(/\.webm$/, '.mp4')
@@ -109,13 +114,13 @@ export async function compressRecording(
   fileKey: string,
 ): Promise<CompressResult> {
   const basePath = resolveBasePath()
-  const inputPath = path.join(basePath, fileKey)
+  const inputPath = resolveFilePath(basePath, fileKey)
   const newFileKey = toCompressedKey(fileKey)
-  const outputPath = path.join(basePath, newFileKey)
+  const outputPath = resolveFilePath(basePath, newFileKey)
   const tempPath = outputPath.replace(/\.mp4$/, '.tmp.mp4')
 
   if (!fs.existsSync(inputPath)) {
-    throw new Error(`Source video not found: ${fileKey}`)
+    throw new Error(`Source video not found: ${inputPath}`)
   }
 
   // Get original file size before compression
@@ -175,7 +180,7 @@ export async function compressRecording(
 
   // Delete old thumbnail file if it exists on disk
   const oldThumbnailKey = fileKey.replace(/\.[^.]+$/, '.jpg')
-  const oldThumbnailPath = path.join(basePath, oldThumbnailKey)
+  const oldThumbnailPath = resolveFilePath(basePath, oldThumbnailKey)
   if (fs.existsSync(oldThumbnailPath)) {
     fs.unlinkSync(oldThumbnailPath)
   }
