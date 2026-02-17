@@ -1,3 +1,6 @@
+// Must be first — provides no-op window.api stubs when running outside Electron
+import './shared/lib/api-stub'
+
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.tsx'

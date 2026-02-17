@@ -6,10 +6,12 @@
 - **Vite 5** — Build tool / dev server
 - **TypeScript 5** — Type safety
 - **Tailwind CSS v4** — Styling (Dark Mode OLED)
+- **shadcn/ui + Radix UI** — Accessible UI primitives (`src/components/ui/`)
+- **motion** (framer-motion) — Sidebar slide animation
 - **Drizzle ORM + better-sqlite3** — Database
 - **Lucide React** — SVG icons
 - **Fira Sans / Fira Code** — Typography
-- **npm** — Package manager
+- **pnpm** — Package manager
 
 ## Clean Architecture
 
@@ -72,6 +74,8 @@ PackVid/
 │   ├── main.tsx             # React entry point
 │   ├── App.tsx              # Root component with routing
 │   ├── index.css            # Tailwind v4 @theme + global styles
+│   ├── components/ui/       # shadcn/ui components (auto-generated)
+│   ├── lib/utils.ts         # cn() helper for shadcn class merging
 │   ├── modules/             # Feature modules (Clean Architecture)
 │   │   ├── _example/        # Reference module — DO NOT DELETE
 │   │   ├── recording/       # Video recording feature
@@ -116,6 +120,15 @@ PackVid/
 - Use `rounded-md` for border radius (consistent)
 - Use semantic color names (`surface`, `primary`, `success`, `danger`, `warning`)
 - No emojis as icons — use Lucide React
+- **Path alias**: `@/*` maps to `src/*` (configured in `tsconfig.json` + `vite.config.ts`)
+
+## UI Components (shadcn/ui)
+
+- shadcn components live in `src/components/ui/` — **do not manually edit** these files
+- Add new components via `pnpm dlx shadcn@latest add <component>`
+- Config: `components.json` (style: new-york, base color: slate, Tailwind CSS variables: on)
+- Installed: `collapsible`, `dropdown-menu`, `tooltip`
+- Use `cn()` from `@/lib/utils` for conditional class merging
 
 ## UI Quality Rules
 
