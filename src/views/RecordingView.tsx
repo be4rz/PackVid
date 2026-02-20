@@ -26,10 +26,13 @@ import { useCamera } from '../shared/hooks/useCamera'
 import { useCameraSettings } from '../shared/hooks/useCameraSettings'
 import { useQRScanner } from '../modules/qr-scanner/presentation/hooks/useQRScanner'
 import { useRecorder } from '../modules/recording/presentation/hooks/useRecorder'
+import { useVideoPlayer } from '../modules/video-library/presentation/hooks/useVideoPlayer'
+import { VideoPlayerModal } from '../modules/video-library/presentation/components/VideoPlayerModal'
 import { useTTS } from '../shared/hooks/useTTS'
 import { playBeep } from '../shared/lib/audio'
 import { formatFileSize, formatDuration } from '../shared/lib/format'
 import type { ScannedOrder, Carrier } from '../modules/qr-scanner/domain/entities/ScannedOrder'
+import type { StorageRecording } from '../modules/video-storage/domain/entities/Recording'
 import type { CameraStatus } from '../shared/types/camera'
 
 /** Carrier display names (Vietnamese) */
@@ -39,13 +42,6 @@ const CARRIER_NAMES: Record<Carrier, string> = {
   GHTK: 'Giao Hàng Tiết Kiệm',
 }
 
-/** TTS notification messages (Vietnamese) */
-const TTS_MESSAGES = {
-  recordingStarted: (trackingNumber: string) =>
-    `Bắt đầu ghi hình đơn hàng ${trackingNumber}`,
-  recordingSaved: () => 'Đã lưu video',
-  recordingCancelled: () => 'Đã hủy ghi hình',
-}
 
 export function RecordingView() {
   const navigate = useNavigate()
@@ -64,7 +60,7 @@ export function RecordingView() {
   } = useCameraSettings(devices)
 
   // ─── TTS ────────────────────────────────────────────────────
-  const { speak } = useTTS()
+  const { speak, config: ttsConfig } = useTTS()
 
   // ─── Stream state ───────────────────────────────────────────
   const [scannerStream, setScannerStream] = useState<MediaStream | null>(null)
@@ -89,7 +85,7 @@ export function RecordingView() {
     autoTriggerRef.current?.(order)
   }, [])
 
-  const { lastScan, isScanning, scanCount, scanHistory, reset: resetScanner } = useQRScanner(
+  const { lastScan, isScanning, scanCount, scanHistory, isCodeVisible, reset: resetScanner } = useQRScanner(
     scannerVideoRef,
     { onScan: handleScan },
   )
@@ -117,6 +113,10 @@ export function RecordingView() {
 
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
 
+  // ─── Video preview & delete ──────────────────────────────
+  const player = useVideoPlayer()
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; fileKey: string; trackingNumber: string } | null>(null)
+
   // ─── Max duration auto-stop ────────────────────────────────
   const [maxDurationSeconds, setMaxDurationSeconds] = useState(600)
   const [showMaxDurationToast, setShowMaxDurationToast] = useState(false)
@@ -126,7 +126,7 @@ export function RecordingView() {
     todayCount: 0, avgDuration: 0, totalCount: 0,
   })
   const [recentVideos, setRecentVideos] = useState<Array<{
-    id: string; trackingNumber: string; createdAt: number
+    id: string; trackingNumber: string; fileKey: string; createdAt: number
     duration: number | null; fileSize: number | null; status: string
   }>>([])
 
@@ -171,6 +171,34 @@ export function RecordingView() {
     fetchRecentData()
   }, [fetchRecentData, isRecording])
 
+  const handlePreview = useCallback((rec: { id: string; trackingNumber: string; fileKey: string; duration: number | null; fileSize: number | null; createdAt: number; status: string }) => {
+    player.open({
+      id: rec.id,
+      trackingNumber: rec.trackingNumber,
+      fileKey: rec.fileKey,
+      duration: rec.duration ?? undefined,
+      fileSize: rec.fileSize ?? undefined,
+      status: rec.status as 'saved',
+      lifecycleStage: 'active',
+      startedAt: new Date(rec.createdAt),
+      createdAt: new Date(rec.createdAt),
+    } as StorageRecording)
+  }, [player])
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget) return
+    try {
+      const result = await window.api.recordings.delete(deleteTarget.id)
+      if (result?.fileKey) {
+        await window.api.storage.deleteFile(result.fileKey).catch(() => {})
+      }
+      setDeleteTarget(null)
+      fetchRecentData()
+    } catch (err) {
+      console.error('[RecordingView] Failed to delete recording:', err)
+    }
+  }, [deleteTarget, fetchRecentData])
+
   // Load max duration from settings on mount
   useEffect(() => {
     window.api.settings.get('max_recording_seconds').then((val: unknown) => {
@@ -187,7 +215,7 @@ export function RecordingView() {
         const summary = await stopRecording()
         console.log('[RecordingView] Auto-stopped at max duration:', summary)
         currentTrackingRef.current = null
-        speak(TTS_MESSAGES.recordingSaved())
+        speak(ttsConfig.messageRecordEnd)
         setShowMaxDurationToast(true)
         setTimeout(() => setShowMaxDurationToast(false), 4000)
       } catch (err) {
@@ -196,6 +224,55 @@ export function RecordingView() {
     }
     autoStop()
   }, [isRecording, recordingDuration, maxDurationSeconds, stopRecording])
+
+  // ─── Auto-end on QR absence ──────────────────────────────
+  const [autoEndEnabled, setAutoEndEnabled] = useState(false)
+  const [autoEndDelaySeconds, setAutoEndDelaySeconds] = useState(5)
+  const autoEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Load auto-end settings on mount
+  useEffect(() => {
+    Promise.all([
+      window.api.settings.get('auto_end_enabled'),
+      window.api.settings.get('auto_end_delay_seconds'),
+    ]).then(([enabled, delay]) => {
+      if (typeof enabled === 'boolean') setAutoEndEnabled(enabled)
+      if (typeof delay === 'number' && delay > 0) setAutoEndDelaySeconds(delay)
+    })
+  }, [])
+
+  // Auto-end timer: when QR disappears from scanner camera during recording
+  useEffect(() => {
+    // Only activate when enabled, recording, and code just became invisible
+    if (!autoEndEnabled || !isRecording || isCodeVisible) {
+      // Code is visible or not recording — cancel any pending timer
+      if (autoEndTimerRef.current) {
+        clearTimeout(autoEndTimerRef.current)
+        autoEndTimerRef.current = null
+      }
+      return
+    }
+
+    // Code is not visible and we're recording — start countdown
+    autoEndTimerRef.current = setTimeout(async () => {
+      autoEndTimerRef.current = null
+      try {
+        const summary = await stopRecording()
+        console.log('[RecordingView] Auto-ended (QR absent):', summary)
+        currentTrackingRef.current = null
+        speak(ttsConfig.messageRecordEnd)
+      } catch (err) {
+        console.error('[RecordingView] Auto-end failed:', err)
+      }
+    }, autoEndDelaySeconds * 1000)
+
+    return () => {
+      if (autoEndTimerRef.current) {
+        clearTimeout(autoEndTimerRef.current)
+        autoEndTimerRef.current = null
+      }
+    }
+  }, [autoEndEnabled, isRecording, isCodeVisible, autoEndDelaySeconds, stopRecording, speak, ttsConfig.messageRecordEnd])
 
   // ─── Core recording actions ────────────────────────────────
 
@@ -227,7 +304,7 @@ export function RecordingView() {
     try {
       await startRecording(trackingNumber, carrier)
       currentTrackingRef.current = trackingNumber
-      speak(TTS_MESSAGES.recordingStarted(trackingNumber))
+      speak(ttsConfig.messageRecordStart)
     } catch (err) {
       console.error('[RecordingView] Start recording failed:', err)
     }
@@ -252,7 +329,7 @@ export function RecordingView() {
     try {
       await startRecording(trackingNumber, carrier)
       currentTrackingRef.current = trackingNumber
-      speak(TTS_MESSAGES.recordingStarted(trackingNumber))
+      speak(ttsConfig.messageRecordStart)
     } catch (err) {
       console.error('[RecordingView] Start recording after overwrite failed:', err)
     }
@@ -263,7 +340,7 @@ export function RecordingView() {
       const summary = await stopRecording()
       console.log('[RecordingView] Recording saved:', summary)
       currentTrackingRef.current = null
-      speak(TTS_MESSAGES.recordingSaved())
+      speak(ttsConfig.messageRecordEnd)
     } catch (err) {
       console.error('[RecordingView] Stop recording failed:', err)
     }
@@ -278,11 +355,10 @@ export function RecordingView() {
     try {
       await cancelRecording()
       currentTrackingRef.current = null
-      speak(TTS_MESSAGES.recordingCancelled())
     } catch (err) {
       console.error('[RecordingView] Cancel recording failed:', err)
     }
-  }, [cancelRecording, speak])
+  }, [cancelRecording])
 
   /** Manual start button — uses doStartRecording with duplicate check */
   const handleStartRecording = useCallback(async () => {
@@ -304,7 +380,7 @@ export function RecordingView() {
         const summary = await stopRecording()
         console.log('[RecordingView] Auto-saved for new order:', summary)
         currentTrackingRef.current = null
-        speak(TTS_MESSAGES.recordingSaved())
+        speak(ttsConfig.messageRecordEnd)
       } catch (err) {
         console.error('[RecordingView] Auto-save failed:', err)
         return
@@ -607,6 +683,8 @@ export function RecordingView() {
                   duration={formatDuration(rec.duration ?? undefined)}
                   size={rec.fileSize ? formatFileSize(rec.fileSize) : '—'}
                   status="saved"
+                  onPreview={() => handlePreview(rec)}
+                  onDelete={() => setDeleteTarget({ id: rec.id, fileKey: rec.fileKey, trackingNumber: rec.trackingNumber })}
                 />
               )
             })
@@ -690,6 +768,51 @@ export function RecordingView() {
             </p>
           </div>
         </div>
+      )}
+
+      {/* Video player modal */}
+      {player.isOpen && player.recording && (
+        <VideoPlayerModal
+          recording={player.recording}
+          videoUrl={player.videoUrl}
+          loading={player.loading}
+          error={player.error}
+          onClose={player.close}
+        />
+      )}
+
+      {/* Delete confirmation dialog */}
+      {deleteTarget && (
+        <DialogOverlay>
+          <div className="bg-surface-900 border border-surface-700 rounded-xl p-6 w-full max-w-sm shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-danger-500/10 rounded-lg flex items-center justify-center">
+                <Trash2 className="w-5 h-5 text-danger-400" />
+              </div>
+              <div>
+                <h3 className="text-surface-100 text-sm font-semibold">Xóa video</h3>
+                <p className="text-surface-400 text-xs font-mono mt-0.5">{deleteTarget.trackingNumber}</p>
+              </div>
+            </div>
+            <p className="text-surface-400 text-sm mb-5">
+              Video sẽ bị xóa vĩnh viễn. Bạn có chắc chắn?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={handleDeleteConfirm}
+                className="flex-1 px-4 py-2 bg-danger-500 hover:bg-danger-600 text-white text-xs font-medium rounded-md transition-colors cursor-pointer"
+              >
+                Xóa
+              </button>
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="flex-1 px-4 py-2 bg-surface-800 hover:bg-surface-700 text-surface-300 text-xs font-medium rounded-md transition-colors cursor-pointer"
+              >
+                Hủy
+              </button>
+            </div>
+          </div>
+        </DialogOverlay>
       )}
     </>
   )
@@ -951,12 +1074,14 @@ function StatCard({ icon, label, value, subtitle, color }: {
   )
 }
 
-function RecordingRow({ orderId, time, duration, size, status }: {
+function RecordingRow({ orderId, time, duration, size, status, onPreview, onDelete }: {
   orderId: string
   time: string
   duration: string
   size: string
   status: 'saved' | 'recording' | 'expired_soon'
+  onPreview?: () => void
+  onDelete?: () => void
 }) {
   const statusConfig = {
     saved: { label: 'Đã lưu', cls: 'text-success-400 bg-success-500/10' },
@@ -983,10 +1108,10 @@ function RecordingRow({ orderId, time, duration, size, status }: {
           {s.label}
         </span>
         <div className="flex items-center gap-1 opacity-0 group-hover/row:opacity-100 transition-opacity">
-          <button className="p-1.5 hover:bg-surface-700 rounded-md text-surface-400 hover:text-surface-200 cursor-pointer transition-colors" title="Phát">
+          <button onClick={onPreview} className="p-1.5 hover:bg-surface-700 rounded-md text-surface-400 hover:text-surface-200 cursor-pointer transition-colors" title="Phát">
             <Play className="w-3.5 h-3.5" />
           </button>
-          <button className="p-1.5 hover:bg-surface-700 rounded-md text-surface-400 hover:text-danger-400 cursor-pointer transition-colors" title="Xóa">
+          <button onClick={onDelete} className="p-1.5 hover:bg-surface-700 rounded-md text-surface-400 hover:text-danger-400 cursor-pointer transition-colors" title="Xóa">
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>

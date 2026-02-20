@@ -10,11 +10,12 @@
  * 3. Extracts ImageData → RGBLuminanceSource → BinaryBitmap
  * 4. Passes to MultiFormatReader.decodeWithState()
  * 5. On successful decode → parseTrackingCode → update lastScan
- * 6. Deduplication: same tracking number within cooldown (3s) is ignored
+ * 6. Deduplication: same tracking number is ignored until a different code
+ *    is scanned or the scanner is reset
  *
  * @example
  * const videoRef = useRef<HTMLVideoElement>(null)
- * const { lastScan, isScanning, scanCount } = useQRScanner(videoRef)
+ * const { lastScan, isScanning, scanCount, isCodeVisible } = useQRScanner(videoRef)
  */
 
 import { useState, useEffect, useRef, useCallback, type RefObject } from 'react'
@@ -39,8 +40,6 @@ interface UseQRScannerOptions {
   enabled?: boolean
   /** Barcode formats to detect. Default: QR_CODE, CODE_128, EAN_13 */
   formats?: BarcodeFormat[]
-  /** Cooldown in ms before same code can be re-scanned. Default: 3000 */
-  cooldownMs?: number
   /** Maximum scan history entries to keep. Default: 10 */
   maxHistory?: number
   /** Callback invoked on each new successful scan */
@@ -56,6 +55,8 @@ interface UseQRScannerReturn {
   scanCount: number
   /** History of recent scans (newest first, max entries configurable) */
   scanHistory: ScannedOrder[]
+  /** Whether a QR/barcode is currently visible in the camera frame */
+  isCodeVisible: boolean
   /** Reset last scan, scan count, and history */
   reset: () => void
 }
@@ -85,8 +86,10 @@ const DEFAULT_FORMATS = [
 ]
 
 const DEFAULT_SCAN_INTERVAL_MS = 100
-const DEFAULT_COOLDOWN_MS = 3000
 const DEFAULT_MAX_HISTORY = 10
+
+/** How long (ms) without a successful decode before isCodeVisible → false */
+const VISIBILITY_TIMEOUT_MS = 1000
 
 // ─── Hook ───────────────────────────────────────────────────────
 
@@ -98,7 +101,6 @@ export function useQRScanner(
     scanIntervalMs = DEFAULT_SCAN_INTERVAL_MS,
     enabled = true,
     formats = DEFAULT_FORMATS,
-    cooldownMs = DEFAULT_COOLDOWN_MS,
     maxHistory = DEFAULT_MAX_HISTORY,
     onScan,
   } = options ?? {}
@@ -107,13 +109,14 @@ export function useQRScanner(
   const [isScanning, setIsScanning] = useState(false)
   const [scanCount, setScanCount] = useState(0)
   const [scanHistory, setScanHistory] = useState<ScannedOrder[]>([])
+  const [isCodeVisible, setIsCodeVisible] = useState(false)
 
   // Refs for mutable state that shouldn't trigger re-renders
   const readerRef = useRef<MultiFormatReader | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null)
   const lastScannedCodeRef = useRef<string>('')
-  const lastScannedTimeRef = useRef<number>(0)
+  const visibilityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ─── Initialize reader with format hints ────────────────────
   useEffect(() => {
@@ -150,8 +153,12 @@ export function useQRScanner(
     setLastScan(null)
     setScanCount(0)
     setScanHistory([])
+    setIsCodeVisible(false)
     lastScannedCodeRef.current = ''
-    lastScannedTimeRef.current = 0
+    if (visibilityTimerRef.current) {
+      clearTimeout(visibilityTimerRef.current)
+      visibilityTimerRef.current = null
+    }
   }, [])
 
   // ─── Main scan loop ─────────────────────────────────────────
@@ -225,13 +232,16 @@ export function useQRScanner(
         const text = result.getText()
         const format = result.getBarcodeFormat()
 
-        // Deduplication check
-        const now = Date.now()
-        if (
-          text === lastScannedCodeRef.current &&
-          now - lastScannedTimeRef.current < cooldownMs
-        ) {
-          return // Same code within cooldown, skip
+        // Code is visible — reset visibility timeout
+        setIsCodeVisible(true)
+        if (visibilityTimerRef.current) {
+          clearTimeout(visibilityTimerRef.current)
+          visibilityTimerRef.current = null
+        }
+
+        // Deduplication: same code as last scan → skip (no history entry, no callback)
+        if (text === lastScannedCodeRef.current) {
+          return
         }
 
         // New scan — parse and update state
@@ -239,7 +249,6 @@ export function useQRScanner(
         const scannedOrder = parseTrackingCode(text, scanFormat)
 
         lastScannedCodeRef.current = text
-        lastScannedTimeRef.current = now
 
         setLastScan(scannedOrder)
         setScanCount((prev) => prev + 1)
@@ -248,8 +257,16 @@ export function useQRScanner(
         // Notify consumer (e.g. trigger beep)
         onScan?.(scannedOrder)
       } catch (err) {
-        // NotFoundException is expected when no code is found in frame — silently ignore
-        if (!(err instanceof NotFoundException)) {
+        // NotFoundException is expected when no code is found in frame
+        if (err instanceof NotFoundException) {
+          // Start visibility timeout: if no decode for VISIBILITY_TIMEOUT_MS → not visible
+          if (!visibilityTimerRef.current) {
+            visibilityTimerRef.current = setTimeout(() => {
+              setIsCodeVisible(false)
+              visibilityTimerRef.current = null
+            }, VISIBILITY_TIMEOUT_MS)
+          }
+        } else {
           // Log unexpected errors but don't crash the scan loop
           console.warn('[useQRScanner] Decode error:', err)
         }
@@ -259,14 +276,19 @@ export function useQRScanner(
     return () => {
       clearInterval(intervalId)
       setIsScanning(false)
+      if (visibilityTimerRef.current) {
+        clearTimeout(visibilityTimerRef.current)
+        visibilityTimerRef.current = null
+      }
     }
-  }, [enabled, scanIntervalMs, cooldownMs, maxHistory, onScan, videoRef])
+  }, [enabled, scanIntervalMs, maxHistory, onScan, videoRef])
 
   return {
     lastScan,
     isScanning,
     scanCount,
     scanHistory,
+    isCodeVisible,
     reset,
   }
 }

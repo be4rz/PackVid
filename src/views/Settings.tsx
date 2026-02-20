@@ -16,10 +16,11 @@ import {
   RefreshCw,
   Info,
   Volume2,
+  TimerOff,
 } from 'lucide-react'
 import { useCamera } from '../shared/hooks/useCamera'
 import { useCameraSettings } from '../shared/hooks/useCameraSettings'
-import { useTTS } from '../shared/hooks/useTTS'
+import { useTTS, DEFAULT_TTS_MESSAGE_START, DEFAULT_TTS_MESSAGE_END } from '../shared/hooks/useTTS'
 import { getVietnameseVoices, getAvailableVoices } from '../shared/lib/tts'
 import { CameraFeed } from '../shared/components/CameraFeed'
 import { StorageSettings } from '../modules/video-storage/presentation/components/StorageSettings'
@@ -31,6 +32,30 @@ export function Settings() {
   const { devices, permission, isLoading: isLoadingDevices, requestPermission, requestStream, releaseStream, refreshDevices } = useCamera()
   const { assignments, isLoading: isLoadingSettings, assignCamera, swapCameras } = useCameraSettings(devices)
   const { speak, isReady: isTTSReady, config: ttsConfig, updateConfig: updateTTSConfig } = useTTS()
+
+  // ─── Auto-end on QR absence settings ─────────────────────
+  const [autoEndEnabled, setAutoEndEnabled] = useState(false)
+  const [autoEndDelaySeconds, setAutoEndDelaySeconds] = useState(5)
+
+  useEffect(() => {
+    Promise.all([
+      window.api.settings.get('auto_end_enabled'),
+      window.api.settings.get('auto_end_delay_seconds'),
+    ]).then(([enabled, delay]) => {
+      if (typeof enabled === 'boolean') setAutoEndEnabled(enabled)
+      if (typeof delay === 'number' && delay > 0) setAutoEndDelaySeconds(delay)
+    })
+  }, [])
+
+  const updateAutoEndEnabled = async (enabled: boolean) => {
+    setAutoEndEnabled(enabled)
+    await window.api.settings.set('auto_end_enabled', enabled)
+  }
+
+  const updateAutoEndDelay = async (seconds: number) => {
+    setAutoEndDelaySeconds(seconds)
+    await window.api.settings.set('auto_end_delay_seconds', seconds)
+  }
 
   // Track streams for preview thumbnails
   const [scannerStream, setScannerStream] = useState<MediaStream | null>(null)
@@ -95,7 +120,7 @@ export function Settings() {
   const isSingleCamera = assignments.scanner === assignments.recorder && assignments.scanner !== null
 
   return (
-    <div className="max-w-4xl">
+    <div>
       {/* Page header */}
       <div className="mb-8">
         <h1 className="text-surface-50 text-xl font-bold">Cài đặt</h1>
@@ -222,7 +247,7 @@ export function Settings() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-surface-200 text-sm font-medium">Bật thông báo giọng nói</p>
-              <p className="text-surface-500 text-xs mt-0.5">Phát giọng nói khi bắt đầu, dừng, hoặc hủy ghi hình</p>
+              <p className="text-surface-500 text-xs mt-0.5">Phát giọng nói khi bắt đầu và kết thúc ghi hình</p>
             </div>
             <button
               onClick={() => updateTTSConfig({ enabled: !ttsConfig.enabled })}
@@ -325,6 +350,37 @@ export function Settings() {
             />
           </div>
 
+          {/* Custom Messages */}
+          <div className={ttsConfig.enabled ? '' : 'opacity-40 pointer-events-none'}>
+            <label className="block text-surface-200 text-sm font-medium mb-2">Nội dung thông báo bắt đầu</label>
+            <input
+              type="text"
+              value={ttsConfig.messageRecordStart}
+              onChange={(e) => updateTTSConfig({ messageRecordStart: e.target.value })}
+              placeholder={DEFAULT_TTS_MESSAGE_START}
+              disabled={!ttsConfig.enabled}
+              className="w-full bg-surface-800 border border-surface-700 text-surface-200 text-sm rounded-lg px-3 py-2.5
+                transition-colors placeholder:text-surface-600
+                hover:border-surface-600 focus:border-primary-500 focus:outline-none
+                disabled:opacity-40 disabled:cursor-not-allowed"
+            />
+          </div>
+
+          <div className={ttsConfig.enabled ? '' : 'opacity-40 pointer-events-none'}>
+            <label className="block text-surface-200 text-sm font-medium mb-2">Nội dung thông báo kết thúc</label>
+            <input
+              type="text"
+              value={ttsConfig.messageRecordEnd}
+              onChange={(e) => updateTTSConfig({ messageRecordEnd: e.target.value })}
+              placeholder={DEFAULT_TTS_MESSAGE_END}
+              disabled={!ttsConfig.enabled}
+              className="w-full bg-surface-800 border border-surface-700 text-surface-200 text-sm rounded-lg px-3 py-2.5
+                transition-colors placeholder:text-surface-600
+                hover:border-surface-600 focus:border-primary-500 focus:outline-none
+                disabled:opacity-40 disabled:cursor-not-allowed"
+            />
+          </div>
+
           {/* Test Button */}
           <div className="pt-2">
             <button
@@ -336,6 +392,79 @@ export function Settings() {
             >
               Thử giọng nói
             </button>
+          </div>
+        </div>
+      </SettingsSection>
+
+      {/* Auto-end on QR absence */}
+      <SettingsSection
+        icon={<TimerOff className="w-5 h-5" />}
+        title="Tự động dừng quay"
+        description="Tự động kết thúc ghi hình khi mã QR rời khỏi camera quét"
+      >
+        <div className="space-y-5">
+          {/* Enable/Disable Toggle */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-surface-200 text-sm font-medium">Bật tự động dừng</p>
+              <p className="text-surface-500 text-xs mt-0.5">Dừng quay khi mã QR không còn trong khung hình camera quét</p>
+            </div>
+            <button
+              onClick={() => updateAutoEndEnabled(!autoEndEnabled)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+                autoEndEnabled ? 'bg-primary-500' : 'bg-surface-700'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  autoEndEnabled ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Delay Slider */}
+          <div className={autoEndEnabled ? '' : 'opacity-40 pointer-events-none'}>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-surface-200 text-sm font-medium">Thời gian chờ</label>
+              <span className="text-surface-400 text-xs font-mono">{autoEndDelaySeconds}s</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-surface-500 text-xs">3s</span>
+              <input
+                type="range"
+                min="3"
+                max="30"
+                step="1"
+                value={autoEndDelaySeconds}
+                onChange={(e) => updateAutoEndDelay(parseInt(e.target.value))}
+                disabled={!autoEndEnabled}
+                className="flex-1 h-2 bg-surface-700 rounded-lg appearance-none cursor-pointer
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary-500
+                  [&::-webkit-slider-thumb]:cursor-pointer
+                  disabled:opacity-40 disabled:cursor-not-allowed"
+              />
+              <span className="text-surface-500 text-xs">30s</span>
+            </div>
+            <p className="text-surface-500 text-xs mt-2">
+              Sau khi mã QR rời khỏi camera quét, hệ thống sẽ chờ {autoEndDelaySeconds} giây trước khi tự động dừng ghi hình
+            </p>
+          </div>
+
+          {/* Info */}
+          <div className="bg-primary-500/10 border border-primary-500/20 rounded-lg p-4">
+            <div className="flex items-start gap-3">
+              <Info className="w-5 h-5 text-primary-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-primary-300 text-sm font-medium">Cách hoạt động</p>
+                <p className="text-primary-400/70 text-xs mt-1">
+                  Khi đang ghi hình, nếu bạn lấy nhãn vận chuyển ra khỏi camera quét QR, hệ thống sẽ đếm ngược và tự động dừng quay.
+                  Nếu mã QR xuất hiện lại trước khi hết thời gian chờ, bộ đếm sẽ được hủy.
+                  Tính năng này hoạt động với cả chế độ 1 camera và 2 camera.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </SettingsSection>

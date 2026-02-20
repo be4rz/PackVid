@@ -114,7 +114,7 @@ export function VideoLibraryView() {
   // ─── Error state ────────────────────────────────────────────
   if (error && !loading && recordings.length === 0) {
     return (
-      <div className="max-w-4xl">
+      <div>
         <PageHeader />
         <div className="flex flex-col items-center justify-center py-20">
           <AlertCircle className="w-10 h-10 text-danger-400 mb-4" />
@@ -135,7 +135,7 @@ export function VideoLibraryView() {
   // ─── Empty state (no recordings at all, no filters) ────────
   if (!loading && recordings.length === 0 && !error && !hasActiveFilters) {
     return (
-      <div className="max-w-4xl">
+      <div>
         <PageHeader />
         <div className="flex flex-col items-center justify-center py-20">
           <div className="w-16 h-16 rounded-full bg-surface-800 flex items-center justify-center mb-4">

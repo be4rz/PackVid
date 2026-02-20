@@ -27,6 +27,8 @@ export interface TTSConfig {
   voiceURI: string | null
   rate: number
   volume: number
+  messageRecordStart: string
+  messageRecordEnd: string
 }
 
 export interface UseTTSReturn {
@@ -44,11 +46,16 @@ export interface UseTTSReturn {
 
 // ─── Constants ─────────────────────────────────────────────────
 
+export const DEFAULT_TTS_MESSAGE_START = 'Bắt đầu ghi hình'
+export const DEFAULT_TTS_MESSAGE_END = 'Đã lưu video'
+
 const DEFAULT_CONFIG: TTSConfig = {
   enabled: true,
   voiceURI: null,
   rate: 1.0,
   volume: 0.8,
+  messageRecordStart: DEFAULT_TTS_MESSAGE_START,
+  messageRecordEnd: DEFAULT_TTS_MESSAGE_END,
 }
 
 // ─── Hook ──────────────────────────────────────────────────────
@@ -69,6 +76,8 @@ export function useTTS(): UseTTSReturn {
         const voiceURI = await window.api.settings.get('tts_voice_uri') as string | null
         const rate = await window.api.settings.get('tts_rate') as number | null
         const volume = await window.api.settings.get('tts_volume') as number | null
+        const messageRecordStart = await window.api.settings.get('tts_message_record_start') as string | null
+        const messageRecordEnd = await window.api.settings.get('tts_message_record_end') as string | null
 
         if (!cancelled) {
           setConfig({
@@ -76,6 +85,8 @@ export function useTTS(): UseTTSReturn {
             voiceURI: voiceURI ?? DEFAULT_CONFIG.voiceURI,
             rate: rate ?? DEFAULT_CONFIG.rate,
             volume: volume ?? DEFAULT_CONFIG.volume,
+            messageRecordStart: messageRecordStart || DEFAULT_CONFIG.messageRecordStart,
+            messageRecordEnd: messageRecordEnd || DEFAULT_CONFIG.messageRecordEnd,
           })
         }
       } catch (err) {
@@ -150,6 +161,12 @@ export function useTTS(): UseTTSReturn {
       }
       if (updates.volume !== undefined) {
         await window.api.settings.set('tts_volume', updates.volume)
+      }
+      if (updates.messageRecordStart !== undefined) {
+        await window.api.settings.set('tts_message_record_start', updates.messageRecordStart)
+      }
+      if (updates.messageRecordEnd !== undefined) {
+        await window.api.settings.set('tts_message_record_end', updates.messageRecordEnd)
       }
     } catch (err) {
       console.error('[useTTS] Failed to update TTS config:', err)
