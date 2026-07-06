@@ -194,19 +194,34 @@ export function useVideoLibrary() {
   // ─── Bulk delete ──────────────────────────────────────────
 
   const deleteRecordings = useCallback(async (ids: string[]): Promise<number> => {
-    let deleted = 0
-    for (const id of ids) {
+    // Each id is independent — run them concurrently so a bulk delete isn't
+    // bottlenecked on sequential IPC round-trips.
+    const outcomes = await Promise.all(ids.map(async (id) => {
       try {
         const result = await window.api.recordings.delete(id)
         if (result?.fileKey) {
-          await window.api.storage.deleteFile(result.fileKey).catch(() => {
-            // File might already be deleted, continue
-          })
+          try {
+            await window.api.storage.deleteFile(result.fileKey)
+          } catch (fileErr) {
+            // DB row is already gone at this point — surface the failure instead of
+            // swallowing it, so permission/lock/disk errors don't silently leave an
+            // orphaned file on disk with no trace in the logs.
+            console.error(`[useVideoLibrary] Failed to delete file on disk for recording ${id} (fileKey: ${result.fileKey}):`, fileErr)
+            return { deleted: true, orphaned: true }
+          }
         }
-        deleted++
+        return { deleted: true, orphaned: false }
       } catch (err) {
         console.error(`[useVideoLibrary] Failed to delete recording ${id}:`, err)
+        return { deleted: false, orphaned: false }
       }
+    }))
+
+    const deleted = outcomes.filter(o => o.deleted).length
+    const orphanedFiles = outcomes.filter(o => o.orphaned).length
+
+    if (orphanedFiles > 0) {
+      console.error(`[useVideoLibrary] ${orphanedFiles} file(s) could not be removed from disk and may be orphaned`)
     }
 
     // Refresh after deletion

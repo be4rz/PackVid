@@ -14,6 +14,7 @@ import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import * as schema from '../src/db/schema'
+import { toErrorMessage, isNativeModuleAbiError } from './lib/errors'
 
 let sqlite: Database.Database
 let db: ReturnType<typeof drizzle>
@@ -35,7 +36,24 @@ export function initDatabase() {
     fs.mkdirSync(dbDir, { recursive: true })
   }
 
-  sqlite = new Database(dbPath)
+  // ─── Load the native better-sqlite3 addon ───────────────────
+  // This is a compiled C++ addon and is the most fragile part of startup:
+  // if it was built against a different ABI than Electron's bundled Node
+  // (NODE_MODULE_VERSION mismatch), the require inside `new Database()`
+  // throws. Translate that into an actionable message pointing at the fix.
+  try {
+    sqlite = new Database(dbPath)
+  } catch (err) {
+    const message = toErrorMessage(err)
+    if (isNativeModuleAbiError(err)) {
+      throw new Error(
+        'Native module "better-sqlite3" was compiled for a different Node.js/Electron ABI ' +
+          `(NODE_MODULE_VERSION mismatch). Rebuild it for Electron with: pnpm run rebuild\n\nOriginal error: ${message}`,
+      )
+    }
+    throw new Error(`Failed to open the database at "${dbPath}": ${message}`)
+  }
+
   sqlite.pragma('journal_mode = WAL')
 
   // Ensure app_settings table exists (avoids migration dependency)

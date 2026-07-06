@@ -19,25 +19,8 @@ import { ipcMain } from 'electron'
 import { eq } from 'drizzle-orm'
 import { getFFmpegPath } from '../lib/ffmpeg'
 import { getDb } from '../db'
-import { appSettings, recordings } from '../../src/db/schema'
-
-/** Resolve storage base path from app_settings */
-function resolveBasePath(): string {
-  const db = getDb()
-  const rows = db.select().from(appSettings)
-    .where(eq(appSettings.key, 'storage_base_path'))
-    .all()
-
-  if (rows.length === 0) {
-    throw new Error('storage_base_path not configured')
-  }
-
-  try {
-    return JSON.parse(rows[0].value) as string
-  } catch {
-    return rows[0].value
-  }
-}
+import { recordings } from '../../src/db/schema'
+import { resolveFileKeyPath } from '../lib/storage-path'
 
 /**
  * Extract a single frame from a video to a temp file.
@@ -104,19 +87,27 @@ export async function generateThumbnailData(videoPath: string): Promise<string> 
 }
 
 export function registerThumbnailHandlers() {
-  ipcMain.handle('thumbnails:generate', async (_event, fileKey: string): Promise<string> => {
-    const basePath = resolveBasePath()
-    const videoPath = path.isAbsolute(fileKey) ? fileKey : path.join(basePath, fileKey)
+  ipcMain.handle(
+    'thumbnails:generate',
+    async (_event, fileKey: string, recordingId?: string): Promise<string> => {
+      const videoPath = resolveFileKeyPath(fileKey)
 
-    const dataUri = await generateThumbnailData(videoPath)
+      const dataUri = await generateThumbnailData(videoPath)
 
-    // Store data URI in DB
-    const db = getDb()
-    db.update(recordings)
-      .set({ thumbnailData: dataUri })
-      .where(eq(recordings.fileKey, fileKey))
-      .run()
+      // Persist the data URI on the recording row.
+      // Prefer matching by `recordingId` (a unique primary key). `fileKey` is
+      // derived from tracking-number + date, so two recordings of the same
+      // parcel on the same day collide — matching by path would overwrite the
+      // wrong row (or both). We fall back to path matching only when no id is
+      // supplied (legacy callers). `videoPath` is the absolute path that
+      // `recordings:create` persisted, so it matches `file_key` in that case.
+      const db = getDb()
+      db.update(recordings)
+        .set({ thumbnailData: dataUri })
+        .where(recordingId ? eq(recordings.id, recordingId) : eq(recordings.fileKey, videoPath))
+        .run()
 
-    return dataUri
-  })
+      return dataUri
+    },
+  )
 }

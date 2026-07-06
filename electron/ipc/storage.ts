@@ -20,45 +20,24 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { ipcMain, dialog, BrowserWindow } from 'electron'
-import { eq } from 'drizzle-orm'
 import { getDb } from '../db'
 import { appSettings } from '../../src/db/schema'
+import { resolveStorageBasePath, resolveFileKeyPath } from '../lib/storage-path'
 
 /** Active write streams keyed by fileKey */
 const activeStreams = new Map<string, fs.WriteStream>()
 
 /**
- * Resolve the storage base path from app_settings.
- * Returns the configured path or throws if not set.
- */
-function resolveBasePath(): string {
-  const db = getDb()
-  const rows = db.select().from(appSettings)
-    .where(eq(appSettings.key, 'storage_base_path'))
-    .all()
-
-  if (rows.length === 0) {
-    throw new Error('storage_base_path not configured in app_settings')
-  }
-
-  try {
-    return JSON.parse(rows[0].value) as string
-  } catch {
-    return rows[0].value
-  }
-}
-
-/**
  * Export for use in other modules (e.g., protocol handler)
  */
 export function getStorageBasePath(): string {
-  return resolveBasePath()
+  return resolveStorageBasePath()
 }
 
 export function registerStorageHandlers() {
   // ─── Get resolved base path ──────────────────────────────────
   ipcMain.handle('storage:getBasePath', async () => {
-    return resolveBasePath()
+    return resolveStorageBasePath()
   })
 
   // ─── Update base path in settings ────────────────────────────
@@ -76,7 +55,7 @@ export function registerStorageHandlers() {
 
   // ─── Ensure directory exists for a file key ──────────────────
   ipcMain.handle('storage:ensureDir', async (_event, fileKey: string) => {
-    const fullPath = path.isAbsolute(fileKey) ? fileKey : path.join(resolveBasePath(), fileKey)
+    const fullPath = resolveFileKeyPath(fileKey)
     const dir = path.dirname(fullPath)
 
     if (!fs.existsSync(dir)) {
@@ -89,7 +68,7 @@ export function registerStorageHandlers() {
     let stream = activeStreams.get(fileKey)
 
     if (!stream) {
-      const fullPath = path.isAbsolute(fileKey) ? fileKey : path.join(resolveBasePath(), fileKey)
+      const fullPath = resolveFileKeyPath(fileKey)
       const dir = path.dirname(fullPath)
 
       // Ensure directory exists
@@ -125,7 +104,7 @@ export function registerStorageHandlers() {
     }
 
     // Get file stats
-    const fullPath = path.isAbsolute(fileKey) ? fileKey : path.join(resolveBasePath(), fileKey)
+    const fullPath = resolveFileKeyPath(fileKey)
 
     if (fs.existsSync(fullPath)) {
       const stats = fs.statSync(fullPath)
@@ -144,7 +123,7 @@ export function registerStorageHandlers() {
       activeStreams.delete(fileKey)
     }
 
-    const fullPath = path.isAbsolute(fileKey) ? fileKey : path.join(resolveBasePath(), fileKey)
+    const fullPath = resolveFileKeyPath(fileKey)
 
     if (fs.existsSync(fullPath)) {
       fs.unlinkSync(fullPath)
@@ -153,9 +132,7 @@ export function registerStorageHandlers() {
 
   // ─── Resolve file_key to absolute path ───────────────────────
   ipcMain.handle('storage:getFullPath', async (_event, fileKey: string) => {
-    if (path.isAbsolute(fileKey)) return fileKey
-    const basePath = resolveBasePath()
-    return path.join(basePath, fileKey)
+    return resolveFileKeyPath(fileKey)
   })
 
   // ─── Pick folder dialog ────────────────────────────────────────

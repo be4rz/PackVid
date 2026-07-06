@@ -1,15 +1,29 @@
 // @see - https://www.electron.build/configuration/configuration
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "YourAppID",
+  "appId": "com.packvid.app",
   "asar": true,
-  "productName": "YourAppName",
+  "productName": "PackVid",
   "directories": {
     "output": "release/${version}"
   },
   "files": [
     "dist",
-    "dist-electron"
+    "dist-electron",
+    // Custom `files` entries replace electron-builder's defaults, so package.json and
+    // node_modules must be listed explicitly. electron-builder still prunes node_modules
+    // down to production `dependencies` (e.g. better-sqlite3, @ffmpeg-installer/ffmpeg),
+    // which are required at runtime by dist-electron/main.js.
+    "package.json",
+    "node_modules/**/*"
+  ],
+  "asarUnpack": [
+    // better-sqlite3 is a compiled native addon (.node binary) — it is loaded via
+    // __filename/dlopen and cannot be read from inside the asar archive.
+    "node_modules/better-sqlite3/**",
+    // @ffmpeg-installer ships a platform-specific ffmpeg binary. electron/lib/ffmpeg.ts
+    // resolves this path from app.asar.unpacked in production (see getFFmpegPath()).
+    "node_modules/@ffmpeg-installer/**"
   ],
   "mac": {
     "target": [

@@ -151,7 +151,7 @@ interface Window {
       }>
     }
     thumbnails: {
-      generate: (fileKey: string) => Promise<string>
+      generate: (fileKey: string, recordingId?: string) => Promise<string>
     }
     lifecycle: {
       compressVideo: (data: { recordingId: string; fileKey: string }) => Promise<{

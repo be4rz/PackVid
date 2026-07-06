@@ -14,7 +14,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
   Camera, Video, Package, HardDrive,
-  Settings, Search, Bell, BarChart3,
+  Settings, BarChart3,
   ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import {
@@ -138,10 +138,16 @@ export function AppLayout() {
           <ThemeToggle compact={collapsed} />
         </div>
 
-        {/* Storage indicator — live data */}
+        {/* Storage indicator — live data.
+            NOTE: We intentionally do NOT render a "used/total" percentage bar here.
+            There is no IPC/OS API exposed (window.api has no disk-space endpoint —
+            recordings.getStats() only aggregates app-level DB sizes, not real
+            free/total disk capacity), so any percentage would have to be computed
+            against a made-up capacity constant. Showing a fake fill bar would imply
+            precision we don't have, so we just show the real used size as text. */}
         <div className="p-4 py-3 border-t border-surface-800 overflow-hidden">
           {!collapsed && (
-            <div className="flex items-center justify-between mb-2 whitespace-nowrap">
+            <div className="flex items-center justify-between whitespace-nowrap">
               <span className="text-xs text-surface-400 flex items-center gap-1.5">
                 <HardDrive className="w-3.5 h-3.5" />
                 Bộ nhớ
@@ -152,16 +158,15 @@ export function AppLayout() {
             </div>
           )}
           {collapsed && (
-            <div className="flex justify-center mb-1.5">
+            <div className="flex flex-col items-center gap-1">
               <HardDrive className="w-3.5 h-3.5 text-surface-500" />
+              {stats && (
+                <span className="text-[9px] text-surface-500 leading-none">
+                  {formatFileSize(stats.totalSize)}
+                </span>
+              )}
             </div>
           )}
-          <div className="w-full bg-surface-800 rounded-full h-1.5">
-            <div
-              className="bg-primary-500 h-1.5 rounded-full transition-all duration-300"
-              style={{ width: stats ? `${Math.min((stats.totalSize / (256 * 1024 * 1024 * 1024)) * 100, 100)}%` : '0%' }}
-            />
-          </div>
         </div>
       </motion.aside>
 
@@ -174,15 +179,9 @@ export function AppLayout() {
               {getPageTitle(location.pathname)}
             </h2>
           </div>
-          <div className="flex items-center gap-2">
-            <button className="p-2 text-surface-400 hover:text-surface-200 hover:bg-surface-800 rounded-md transition-colors cursor-pointer">
-              <Search className="w-4.5 h-4.5" />
-            </button>
-            <button className="p-2 text-surface-400 hover:text-surface-200 hover:bg-surface-800 rounded-md transition-colors cursor-pointer relative">
-              <Bell className="w-4.5 h-4.5" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-danger-500 rounded-full" />
-            </button>
-          </div>
+          {/* Search and notifications were removed: they had no onClick handlers
+              and no backend behind them (the Bell's red dot wasn't tied to any
+              real state), so they misleadingly implied features that don't exist. */}
         </header>
 
         {/* Page content */}

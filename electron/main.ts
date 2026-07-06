@@ -1,8 +1,8 @@
-import { app, BrowserWindow, systemPreferences } from 'electron'
-import { createRequire } from 'node:module'
+import { app, BrowserWindow, systemPreferences, dialog } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { initDatabase } from './db'
+import { toErrorMessage } from './lib/errors'
 import { registerSettingsHandlers } from './ipc/settings'
 import { registerStorageHandlers } from './ipc/storage'
 import { registerRecordingsHandlers } from './ipc/recordings'
@@ -11,7 +11,6 @@ import { registerLifecycleHandlers } from './ipc/lifecycle'
 import { startLifecycleScheduler } from './lifecycle-scheduler'
 import { registerMediaProtocol } from './protocol'
 
-const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // The built directory structure
@@ -76,7 +75,26 @@ app.on('activate', () => {
 })
 
 app.whenReady().then(async () => {
-  initDatabase()
+  try {
+    initDatabase()
+  } catch (err) {
+    // A failed DB init leaves the app unusable — surface it and quit cleanly
+    // instead of letting it bubble up as an unhandled promise rejection while
+    // the window keeps loading against a non-existent database.
+    const message = toErrorMessage(err)
+    console.error('[main] Database initialization failed:', message)
+    // Vietnamese-first message for the user; keep the technical detail below
+    // for support/debugging.
+    dialog.showErrorBox(
+      'Không thể khởi tạo cơ sở dữ liệu',
+      `Ứng dụng không thể mở cơ sở dữ liệu và sẽ đóng lại.\n` +
+        `Vui lòng khởi động lại ứng dụng; nếu vẫn lỗi, hãy liên hệ bộ phận hỗ trợ.\n\n` +
+        `Chi tiết kỹ thuật:\n${message}`,
+    )
+    app.quit()
+    return
+  }
+
   registerMediaProtocol()  // ← Register custom protocol BEFORE creating windows
   registerSettingsHandlers()
   registerStorageHandlers()

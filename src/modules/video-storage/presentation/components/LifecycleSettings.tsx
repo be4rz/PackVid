@@ -162,6 +162,12 @@ export function LifecycleSettings() {
           {archiving ? 'Đang nén...' : 'Chạy nén ngay'}
         </button>
 
+        {/* Disclosure: manual run ignores the "Nén sau X ngày" setting above and
+            compresses every current active video immediately, regardless of age. */}
+        <p className="text-surface-600 text-[11px] mt-2 text-center">
+          Nút này nén NGAY LẬP TỨC tất cả video đang hoạt động, không áp dụng mốc thời gian "Nén sau" ở trên.
+        </p>
+
         {/* Per-video progress during manual compress */}
         {archiving && archiveProgress.total > 0 && (
           <div className="mt-3 p-3 bg-surface-800/50 rounded-lg">

@@ -68,6 +68,16 @@ export function RecordingView() {
   const [scannerStatus, setScannerStatus] = useState<CameraStatus>('idle')
   const [recorderStatus, setRecorderStatus] = useState<CameraStatus>('idle')
 
+  // Always-current refs to the live streams — used by acquireStream (to release
+  // the previous stream for a role even under rapid reassignment) and by the
+  // unmount cleanup effect (whose closure would otherwise capture stale `null`s)
+  const scannerStreamRef = useRef<MediaStream | null>(null)
+  const recorderStreamRef = useRef<MediaStream | null>(null)
+  // Per-role request tokens — guard against an in-flight acquireStream call
+  // resolving after a newer call has already superseded it
+  const scannerAcquireTokenRef = useRef(0)
+  const recorderAcquireTokenRef = useRef(0)
+
   // ─── Derived: single-camera mode ───────────────────────────
   const isSingleCamera = assignments.scanner !== null
     && assignments.scanner === assignments.recorder
@@ -95,6 +105,7 @@ export function RecordingView() {
     isRecording,
     isPaused,
     duration: recordingDuration,
+    error: recordingError,
     startRecording,
     stopRecording,
     cancelRecording,
@@ -190,7 +201,9 @@ export function RecordingView() {
     try {
       const result = await window.api.recordings.delete(deleteTarget.id)
       if (result?.fileKey) {
-        await window.api.storage.deleteFile(result.fileKey).catch(() => {})
+        await window.api.storage.deleteFile(result.fileKey).catch((err) => {
+          console.error('[RecordingView] Failed to delete file for recording:', err)
+        })
       }
       setDeleteTarget(null)
       fetchRecentData()
@@ -223,7 +236,7 @@ export function RecordingView() {
       }
     }
     autoStop()
-  }, [isRecording, recordingDuration, maxDurationSeconds, stopRecording])
+  }, [isRecording, recordingDuration, maxDurationSeconds, stopRecording, speak, ttsConfig.messageRecordEnd])
 
   // ─── Auto-end on QR absence ──────────────────────────────
   const [autoEndEnabled, setAutoEndEnabled] = useState(false)
@@ -308,7 +321,7 @@ export function RecordingView() {
     } catch (err) {
       console.error('[RecordingView] Start recording failed:', err)
     }
-  }, [isSingleCamera, scannerStream, recorderStream, startRecording])
+  }, [isSingleCamera, scannerStream, recorderStream, startRecording, speak, ttsConfig.messageRecordStart])
 
   /** Overwrite existing recording and start new */
   const handleOverwrite = useCallback(async () => {
@@ -333,7 +346,7 @@ export function RecordingView() {
     } catch (err) {
       console.error('[RecordingView] Start recording after overwrite failed:', err)
     }
-  }, [duplicateDialog, startRecording])
+  }, [duplicateDialog, startRecording, speak, ttsConfig.messageRecordStart])
 
   const handleStopRecording = useCallback(async () => {
     try {
@@ -344,7 +357,7 @@ export function RecordingView() {
     } catch (err) {
       console.error('[RecordingView] Stop recording failed:', err)
     }
-  }, [stopRecording, speak])
+  }, [stopRecording, speak, ttsConfig.messageRecordEnd])
 
   const handleCancelRecording = useCallback(async () => {
     setShowCancelConfirm(true)
@@ -389,7 +402,7 @@ export function RecordingView() {
 
     // Start recording for the new order (with duplicate check)
     await doStartRecording(order.trackingNumber, order.carrier)
-  }, [isSingleCamera, scannerStream, recorderStream, isRecording, stopRecording, doStartRecording, speak])
+  }, [isSingleCamera, scannerStream, recorderStream, isRecording, stopRecording, doStartRecording, speak, ttsConfig.messageRecordEnd])
 
   // Keep ref in sync with latest callback
   useEffect(() => {
@@ -434,11 +447,17 @@ export function RecordingView() {
     deviceId: string | null,
     setStream: (s: MediaStream | null) => void,
     setStatus: (s: CameraStatus) => void,
-    oldStream: MediaStream | null,
+    streamRef: React.MutableRefObject<MediaStream | null>,
+    tokenRef: React.MutableRefObject<number>,
   ) => {
-    // Release old stream
-    if (oldStream) {
-      releaseStream(oldStream)
+    // Bump the token — any previous in-flight call for this role is now stale
+    const token = ++tokenRef.current
+
+    // Always release whatever stream this role currently holds before
+    // acquiring a new one, so rapid reassignment can never leak a stream
+    if (streamRef.current) {
+      releaseStream(streamRef.current)
+      streamRef.current = null
       setStream(null)
     }
 
@@ -450,15 +469,27 @@ export function RecordingView() {
     setStatus('active') // show "connecting" state
     try {
       const stream = await requestStream(deviceId)
+
+      // A newer call superseded this one while we were awaiting — release
+      // the stream we just got and don't touch state
+      if (token !== tokenRef.current) {
+        releaseStream(stream)
+        return
+      }
+
+      streamRef.current = stream
       setStream(stream)
       setStatus('active')
     } catch (err) {
+      if (token !== tokenRef.current) return // superseded — ignore stale error
+
       console.error('[RecordingView] Stream error:', err)
       if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
         setStatus('permission_denied')
       } else {
         setStatus('error')
       }
+      streamRef.current = null
       setStream(null)
     }
   }, [requestStream, releaseStream])
@@ -467,23 +498,23 @@ export function RecordingView() {
   useEffect(() => {
     if (isLoadingSettings || permission !== 'granted') return
 
-    acquireStream(assignments.scanner, setScannerStream, setScannerStatus, scannerStream)
+    acquireStream(assignments.scanner, setScannerStream, setScannerStatus, scannerStreamRef, scannerAcquireTokenRef)
 
     // Only re-run when assignment or permission changes, not when stream changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignments.scanner, permission, isLoadingSettings])
 
+  // Mirror scanner status in single-camera mode (same physical camera serves
+  // both roles, so the recorder tile reflects the scanner's connection state)
+  useEffect(() => {
+    if (isSingleCamera) setRecorderStatus(scannerStatus)
+  }, [isSingleCamera, scannerStatus])
+
   // Acquire recorder stream (skip if same device as scanner)
   useEffect(() => {
-    if (isLoadingSettings || permission !== 'granted') return
+    if (isLoadingSettings || permission !== 'granted' || isSingleCamera) return
 
-    if (isSingleCamera) {
-      // In single-camera mode, reuse scanner stream reference visually
-      setRecorderStatus(scannerStatus)
-      return
-    }
-
-    acquireStream(assignments.recorder, setRecorderStream, setRecorderStatus, recorderStream)
+    acquireStream(assignments.recorder, setRecorderStream, setRecorderStatus, recorderStreamRef, recorderAcquireTokenRef)
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignments.recorder, permission, isLoadingSettings, isSingleCamera])
@@ -491,8 +522,15 @@ export function RecordingView() {
   // ─── Cleanup on unmount ─────────────────────────────────────
   useEffect(() => {
     return () => {
-      if (scannerStream) releaseStream(scannerStream)
-      if (recorderStream) releaseStream(recorderStream)
+      // Read from refs (always current) rather than the closed-over state,
+      // so the actual live streams are released even though this effect's
+      // own deps array never re-runs. Reading `.current` at cleanup time is
+      // intentional here (we want the live stream, not a mount-time snapshot),
+      // so the ref-in-cleanup lint rule is deliberately suppressed.
+      /* eslint-disable react-hooks/exhaustive-deps */
+      if (scannerStreamRef.current) releaseStream(scannerStreamRef.current)
+      if (recorderStreamRef.current) releaseStream(recorderStreamRef.current)
+      /* eslint-enable react-hooks/exhaustive-deps */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -766,6 +804,17 @@ export function RecordingView() {
             <p className="text-surface-400 text-xs">
               Đạt thời gian tối đa ({Math.floor(maxDurationSeconds / 60)} phút)
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Recording error toast — surfaces mid-recording / start failures */}
+      {recordingError && (
+        <div className="fixed bottom-6 right-6 z-50 bg-surface-900 border border-danger-500/30 rounded-xl px-5 py-3 shadow-2xl flex items-center gap-3 animate-fade-in">
+          <AlertTriangle className="w-5 h-5 text-danger-400" />
+          <div>
+            <p className="text-surface-200 text-sm font-medium">Lỗi ghi hình</p>
+            <p className="text-surface-400 text-xs">{recordingError}</p>
           </div>
         </div>
       )}

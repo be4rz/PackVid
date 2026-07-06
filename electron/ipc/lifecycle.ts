@@ -5,29 +5,12 @@ import { ipcMain } from 'electron'
 import { eq } from 'drizzle-orm'
 import { getFFmpegPath } from '../lib/ffmpeg'
 import { getDb } from '../db'
-import { appSettings, recordings } from '../../src/db/schema'
+import { recordings } from '../../src/db/schema'
 import { generateThumbnailData } from './thumbnails'
+import { resolveStorageBasePath } from '../lib/storage-path'
 
 /** Track compression progress per recording ID */
 const compressionProgress = new Map<string, number>()
-
-/** Resolve storage base path from app_settings */
-function resolveBasePath(): string {
-  const db = getDb()
-  const rows = db.select().from(appSettings)
-    .where(eq(appSettings.key, 'storage_base_path'))
-    .all()
-
-  if (rows.length === 0) {
-    throw new Error('storage_base_path not configured')
-  }
-
-  try {
-    return JSON.parse(rows[0].value) as string
-  } catch {
-    return rows[0].value
-  }
-}
 
 /** Resolve a fileKey to an absolute path (handles both absolute and legacy relative keys) */
 function resolveFilePath(basePath: string, fileKey: string): string {
@@ -113,7 +96,7 @@ export async function compressRecording(
   recordingId: string,
   fileKey: string,
 ): Promise<CompressResult> {
-  const basePath = resolveBasePath()
+  const basePath = resolveStorageBasePath()
   const inputPath = resolveFilePath(basePath, fileKey)
   const newFileKey = toCompressedKey(fileKey)
   const outputPath = resolveFilePath(basePath, newFileKey)

@@ -79,8 +79,8 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   thumbnails: {
-    generate: (fileKey: string) =>
-      ipcRenderer.invoke('thumbnails:generate', fileKey),
+    generate: (fileKey: string, recordingId?: string) =>
+      ipcRenderer.invoke('thumbnails:generate', fileKey, recordingId),
   },
 
   lifecycle: {

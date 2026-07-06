@@ -22,14 +22,12 @@ export function useVideoPlayer() {
     setError(null)
     setLoading(true)
 
-    try {
-      // Use custom media:// protocol for secure file access
-      setVideoUrl(`media://${encodeURIComponent(rec.fileKey)}`)
-    } catch {
-      setError('Không thể phát video. File có thể đã bị xóa.')
-    } finally {
-      setLoading(false)
-    }
+    // Use custom media:// protocol for secure file access.
+    // Note: this URL construction can't fail — a missing/moved file only
+    // surfaces later, asynchronously, via the <video> element's onError
+    // handler (wired up in VideoPlayerModal), not here.
+    setVideoUrl(`media://${encodeURIComponent(rec.fileKey)}`)
+    setLoading(false)
   }, [])
 
   const close = useCallback(() => {

@@ -5,7 +5,7 @@
  * metadata panel showing recording details. Closes on ESC or backdrop click.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { X, Loader2, AlertCircle } from 'lucide-react'
 import { formatFileSize } from '../../../../shared/lib/format'
 import type { StorageRecording } from '../../../video-storage/domain/entities/Recording'
@@ -27,6 +27,22 @@ interface VideoPlayerModalProps {
 
 export function VideoPlayerModal({ recording, videoUrl, loading, error, onClose }: VideoPlayerModalProps) {
   const backdropRef = useRef<HTMLDivElement>(null)
+
+  // Playback errors (e.g. missing/moved file → media:// ERR_FILE_NOT_FOUND) surface
+  // asynchronously from the <video> element itself, so they're tracked locally here
+  // rather than in the caller's state.
+  const [playbackError, setPlaybackError] = useState<string | null>(null)
+
+  // Reset the playback error whenever a new video is loaded
+  useEffect(() => {
+    setPlaybackError(null)
+  }, [videoUrl])
+
+  function handleVideoError() {
+    setPlaybackError('Không thể phát video — tập tin có thể đã bị xóa hoặc di chuyển.')
+  }
+
+  const displayError = error ?? playbackError
 
   // ESC to close
   useEffect(() => {
@@ -68,18 +84,19 @@ export function VideoPlayerModal({ recording, videoUrl, loading, error, onClose 
           </div>
         )}
 
-        {error && (
+        {displayError && !loading && (
           <div className="flex flex-col items-center gap-3">
             <AlertCircle className="w-8 h-8 text-danger-400" />
-            <p className="text-surface-300 text-sm">{error}</p>
+            <p className="text-surface-300 text-sm">{displayError}</p>
           </div>
         )}
 
-        {videoUrl && !loading && !error && (
+        {videoUrl && !loading && !displayError && (
           <video
             src={videoUrl}
             controls
             autoPlay
+            onError={handleVideoError}
             className="max-h-full max-w-full rounded-lg shadow-2xl"
           />
         )}

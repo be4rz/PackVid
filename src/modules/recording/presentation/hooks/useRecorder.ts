@@ -80,6 +80,8 @@ interface UseRecorderReturn {
   duration: number
   /** ID of the current recording (null when idle) */
   currentRecordingId: string | null
+  /** Most recent start/stop/mid-recording error message, or null when none */
+  error: string | null
   /** Start recording from the given stream */
   startRecording: (trackingNumber: string, carrier?: string) => Promise<void>
   /** Stop recording and save — returns summary */
@@ -98,6 +100,7 @@ export function useRecorder(recorderStream: MediaStream | null): UseRecorderRetu
   const [isPaused, setIsPaused] = useState(false)
   const [duration, setDuration] = useState(0)
   const [currentRecordingId, setCurrentRecordingId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   // ─── Refs (mutable, no re-render) ──────────────────────────
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -106,6 +109,12 @@ export function useRecorder(recorderStream: MediaStream | null): UseRecorderRetu
   const startTimeRef = useRef<number>(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordingIdRef = useRef<string>('')
+  // Synchronous in-flight guard — set before any await in startRecording so
+  // two rapid calls can't both pass the "already recording" check
+  const startingRef = useRef(false)
+  // Synchronous in-flight guard for stopRecording — prevents a second stop()
+  // call from resetting shared state while the first is still finalizing
+  const stoppingRef = useRef(false)
 
   // Track pause offset for accurate duration
   const pausedDurationRef = useRef<number>(0)
@@ -133,147 +142,227 @@ export function useRecorder(recorderStream: MediaStream | null): UseRecorderRetu
     }
   }, [])
 
+  // ─── Reset recorder UI/session state ───────────────────────
+  // Shared by every terminal path (stop, cancel, error, start-failure) so the
+  // reset stays in one place instead of being copy-pasted five times.
+  const resetRecordingState = useCallback(() => {
+    mediaRecorderRef.current = null
+    stopTimer()
+    setIsRecording(false)
+    setIsPaused(false)
+    setDuration(0)
+    setCurrentRecordingId(null)
+  }, [stopTimer])
+
   // ─── Start recording ──────────────────────────────────────
   const startRecording = useCallback(async (trackingNumber: string, carrier?: string) => {
     if (!recorderStream) {
       throw new Error('No recorder stream available')
     }
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+    // Synchronous re-entrancy guard — checked and set before any await so two
+    // rapid calls can't both pass (mediaRecorderRef isn't set until later)
+    if (startingRef.current || (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive')) {
       throw new Error('Already recording')
     }
+    startingRef.current = true
 
     const id = generateId()
     const fileKey = generateFileKey(trackingNumber)
     const now = Date.now()
+    let dbRowCreated = false
 
-    // 1. Create DB row
-    await window.api.recordings.create({
-      id,
-      trackingNumber,
-      carrier,
-      fileKey,
-      status: 'recording',
-      startedAt: now,
-      createdAt: now,
-    })
+    try {
+      // 1. Create DB row
+      await window.api.recordings.create({
+        id,
+        trackingNumber,
+        carrier,
+        fileKey,
+        status: 'recording',
+        startedAt: now,
+        createdAt: now,
+      })
+      dbRowCreated = true
 
-    // 2. Store refs
-    recordingIdRef.current = id
-    fileKeyRef.current = fileKey
-    trackingNumberRef.current = trackingNumber
-    startTimeRef.current = now
-    pausedDurationRef.current = 0
+      // 2. Store refs
+      recordingIdRef.current = id
+      fileKeyRef.current = fileKey
+      trackingNumberRef.current = trackingNumber
+      startTimeRef.current = now
+      pausedDurationRef.current = 0
 
-    // 3. Create MediaRecorder
-    const mimeType = getSupportedMimeType()
-    const recorder = new MediaRecorder(recorderStream, {
-      mimeType: mimeType || undefined,
-    })
+      // 3. Create MediaRecorder
+      const mimeType = getSupportedMimeType()
+      const recorder = new MediaRecorder(recorderStream, {
+        mimeType: mimeType || undefined,
+      })
 
-    // 4. Handle data chunks — stream to disk via IPC
-    recorder.ondataavailable = async (event: BlobEvent) => {
-      if (event.data.size > 0) {
-        try {
-          const buffer = new Uint8Array(await event.data.arrayBuffer())
-          await window.api.storage.writeChunk(fileKeyRef.current, buffer)
-        } catch (err) {
-          console.error('[useRecorder] Failed to write chunk:', err)
+      // 4. Handle data chunks — stream to disk via IPC
+      recorder.ondataavailable = async (event: BlobEvent) => {
+        if (event.data.size > 0) {
+          try {
+            const buffer = new Uint8Array(await event.data.arrayBuffer())
+            await window.api.storage.writeChunk(fileKeyRef.current, buffer)
+          } catch (err) {
+            console.error('[useRecorder] Failed to write chunk:', err)
+          }
+        }
+
+        // If we're stopping, resolve the promise so stopRecording can continue
+        if (recorder.state === 'inactive' && stopResolveRef.current) {
+          stopResolveRef.current()
+          stopResolveRef.current = null
         }
       }
 
-      // If we're stopping, resolve the promise so stopRecording can continue
-      if (recorder.state === 'inactive' && stopResolveRef.current) {
-        stopResolveRef.current()
-        stopResolveRef.current = null
+      recorder.onerror = (event) => {
+        console.error('[useRecorder] MediaRecorder error:', event)
+        // Fatal mid-recording error — the recorder can no longer produce data,
+        // so the partial file is unusable. Capture the refs before resetting,
+        // then tear down the orphaned DB row + partial file (like a cancel) so
+        // nothing is left stuck at status:'recording' with a dangling stream.
+        const orphanFileKey = fileKeyRef.current
+        const orphanId = recordingIdRef.current
+        resetRecordingState()
+        setError('Đã xảy ra lỗi khi ghi hình')
+
+        void (async () => {
+          if (orphanFileKey) {
+            try {
+              await window.api.storage.deleteFile(orphanFileKey)
+            } catch (err) {
+              console.error('[useRecorder] Failed to delete file after recorder error:', err)
+            }
+          }
+          if (orphanId) {
+            try {
+              await window.api.recordings.delete(orphanId)
+            } catch (err) {
+              console.error('[useRecorder] Failed to delete recording row after recorder error:', err)
+            }
+          }
+        })()
       }
+
+      mediaRecorderRef.current = recorder
+
+      // 5. Start recording with 1-second chunk interval
+      recorder.start(CHUNK_INTERVAL_MS)
+
+      // 6. Update state
+      setError(null)
+      setIsRecording(true)
+      setIsPaused(false)
+      setDuration(0)
+      setCurrentRecordingId(id)
+
+      // 7. Start duration timer
+      startTimer()
+    } catch (err) {
+      // Roll back so the DB row doesn't get stuck at status:'recording' forever
+      if (dbRowCreated) {
+        try {
+          await window.api.recordings.delete(id)
+        } catch (deleteErr) {
+          console.error('[useRecorder] Failed to roll back recording row after start failure:', deleteErr)
+        }
+      }
+      resetRecordingState()
+      // Surface a Vietnamese message to the UI; keep the original error for logs
+      setError('Không thể bắt đầu ghi hình')
+      throw err
+    } finally {
+      startingRef.current = false
     }
-
-    recorder.onerror = (event) => {
-      console.error('[useRecorder] MediaRecorder error:', event)
-    }
-
-    mediaRecorderRef.current = recorder
-
-    // 5. Start recording with 1-second chunk interval
-    recorder.start(CHUNK_INTERVAL_MS)
-
-    // 6. Update state
-    setIsRecording(true)
-    setIsPaused(false)
-    setDuration(0)
-    setCurrentRecordingId(id)
-
-    // 7. Start duration timer
-    startTimer()
-  }, [recorderStream, startTimer])
+  }, [recorderStream, startTimer, resetRecordingState])
 
   // ─── Stop recording ───────────────────────────────────────
   const stopRecording = useCallback(async (): Promise<RecordingSummary> => {
+    // Re-entrancy guard — a second stop() while the first is finalizing must
+    // not race on the shared refs/state. Bail without touching state so the
+    // in-flight stop can finish cleanly.
+    if (stoppingRef.current) {
+      throw new Error('Stop already in progress')
+    }
+
     const recorder = mediaRecorderRef.current
+
     if (!recorder || recorder.state === 'inactive') {
+      // Nothing active to stop — still reset state so isRecording doesn't
+      // stay stuck as true (e.g. recorder already died via onerror)
+      resetRecordingState()
       throw new Error('No active recording to stop')
     }
 
-    // 1. Stop MediaRecorder and wait for final chunk
-    await new Promise<void>((resolve) => {
-      stopResolveRef.current = resolve
-      recorder.stop()
-    })
+    stoppingRef.current = true
+    try {
+      // 1. Stop MediaRecorder and wait for final chunk
+      await new Promise<void>((resolve) => {
+        stopResolveRef.current = resolve
+        recorder.stop()
+      })
 
-    // 2. Stop timer
-    stopTimer()
+      // 2. Stop timer
+      stopTimer()
 
-    // 3. Finalize file — close stream, get file size
-    const { fileSize } = await window.api.storage.finalize(fileKeyRef.current)
+      // 3. Finalize file — close stream, get file size
+      const { fileSize } = await window.api.storage.finalize(fileKeyRef.current)
 
-    // 4. Calculate final duration (milliseconds)
-    const finalDuration = Date.now() - startTimeRef.current - pausedDurationRef.current
+      // 4. Calculate final duration (milliseconds)
+      const finalDuration = Date.now() - startTimeRef.current - pausedDurationRef.current
 
-    // 5. Update DB row
-    await window.api.recordings.update(recordingIdRef.current, {
-      status: 'saved',
-      fileSize,
-      duration: finalDuration,
-      finishedAt: Date.now(),
-    })
+      // 5. Update DB row
+      await window.api.recordings.update(recordingIdRef.current, {
+        status: 'saved',
+        fileSize,
+        duration: finalDuration,
+        finishedAt: Date.now(),
+      })
 
-    // 6. Generate thumbnail (fire-and-forget, non-blocking)
-    window.api.thumbnails.generate(fileKeyRef.current).catch((err: unknown) => {
-      console.error('[useRecorder] Thumbnail generation failed:', err)
-    })
+      // 6. Generate thumbnail (fire-and-forget, non-blocking).
+      // Pass the recording id so the DB update targets this exact row —
+      // fileKey alone can collide across same-day recordings of one parcel.
+      window.api.thumbnails.generate(fileKeyRef.current, recordingIdRef.current).catch((err: unknown) => {
+        console.error('[useRecorder] Thumbnail generation failed:', err)
+      })
 
-    // 7. Build summary
-    const summary: RecordingSummary = {
-      id: recordingIdRef.current,
-      trackingNumber: trackingNumberRef.current,
-      fileKey: fileKeyRef.current,
-      fileSize,
-      duration: finalDuration,
+      // 7. Build summary
+      const summary: RecordingSummary = {
+        id: recordingIdRef.current,
+        trackingNumber: trackingNumberRef.current,
+        fileKey: fileKeyRef.current,
+        fileSize,
+        duration: finalDuration,
+      }
+
+      setError(null)
+      return summary
+    } finally {
+      // Always reset state, even if stop/finalize/update above throws,
+      // so isRecording never stays stuck as true
+      resetRecordingState()
+      stoppingRef.current = false
     }
-
-    // 8. Reset state
-    mediaRecorderRef.current = null
-    setIsRecording(false)
-    setIsPaused(false)
-    setDuration(0)
-    setCurrentRecordingId(null)
-
-    return summary
-  }, [stopTimer])
+  }, [stopTimer, resetRecordingState])
 
   // ─── Cancel recording ─────────────────────────────────────
   const cancelRecording = useCallback(async () => {
     const recorder = mediaRecorderRef.current
     if (recorder && recorder.state !== 'inactive') {
-      // Stop without waiting for final chunk
-      recorder.stop()
+      // Wait for the final ondataavailable to flush its last chunk before we
+      // delete. Deleting first races the queued writeChunk, which would
+      // re-open the stream and resurrect a partial file after the unlink.
+      await new Promise<void>((resolve) => {
+        stopResolveRef.current = resolve
+        recorder.stop()
+      })
     }
 
     // Stop timer
     stopTimer()
 
-    // Delete file from disk
+    // Delete file from disk — safe now that no more chunks will arrive
     if (fileKeyRef.current) {
       try {
         await window.api.storage.deleteFile(fileKeyRef.current)
@@ -292,12 +381,8 @@ export function useRecorder(recorderStream: MediaStream | null): UseRecorderRetu
     }
 
     // Reset state
-    mediaRecorderRef.current = null
-    setIsRecording(false)
-    setIsPaused(false)
-    setDuration(0)
-    setCurrentRecordingId(null)
-  }, [stopTimer])
+    resetRecordingState()
+  }, [stopTimer, resetRecordingState])
 
   // ─── Pause recording ──────────────────────────────────────
   const pauseRecording = useCallback(() => {
@@ -339,6 +424,7 @@ export function useRecorder(recorderStream: MediaStream | null): UseRecorderRetu
     isPaused,
     duration,
     currentRecordingId,
+    error,
     startRecording,
     stopRecording,
     cancelRecording,

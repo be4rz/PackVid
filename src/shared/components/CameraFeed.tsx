@@ -81,7 +81,6 @@ export function CameraFeed({
   onVideoRef,
   // Recording props
   isRecording = false,
-  isPaused = false,
   duration = 0,
   onStart,
   onStop,

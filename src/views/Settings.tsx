@@ -529,7 +529,6 @@ function SettingsSection({
 
 function CameraSelector({
   role,
-  label,
   selectedDeviceId,
   devices,
   onChange,
@@ -542,8 +541,12 @@ function CameraSelector({
   onChange: (deviceId: string | null) => void
   disabled: boolean
 }) {
-  const roleColor = role === 'scanner' ? 'primary' : 'success'
   const badgeBg = role === 'scanner' ? 'bg-primary-500/10 text-primary-400' : 'bg-success-500/10 text-success-400'
+  // Tailwind v4 only generates classes it can see as complete literal strings in
+  // source — a template-built class like `focus:border-${roleColor}-500` is never
+  // emitted, so the focus ring silently didn't render. Use a full-literal lookup
+  // per role instead so both classes are statically visible to Tailwind.
+  const focusBorderClass = role === 'scanner' ? 'focus:border-primary-500' : 'focus:border-success-500'
 
   return (
     <div className="flex items-center gap-4">
@@ -557,7 +560,7 @@ function CameraSelector({
           disabled={disabled}
           className={`w-full bg-surface-800 border border-surface-700 text-surface-200 text-sm rounded-lg px-3 py-2.5 pr-8
             appearance-none cursor-pointer transition-colors
-            hover:border-surface-600 focus:border-${roleColor}-500 focus:outline-none
+            hover:border-surface-600 ${focusBorderClass} focus:outline-none
             disabled:opacity-40 disabled:cursor-not-allowed`}
         >
           <option value="">— Chọn camera —</option>
