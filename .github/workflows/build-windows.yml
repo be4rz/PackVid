@@ -1,8 +1,20 @@
 name: Build Windows Installer
 
-# Manual trigger — run from the Actions tab when you want a test build.
+# Auto-build on every push to main; also runnable manually from the Actions tab.
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
+
+# Never run two builds at once — they'd race on the shared release tag.
+concurrency:
+  group: build-windows
+  cancel-in-progress: true
+
+# Needed to create/update the GitHub Release that hosts the installer.
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -30,16 +42,34 @@ jobs:
 
       # Compile TypeScript + bundle renderer/main, then package the NSIS
       # installer. --publish never keeps electron-builder from trying to
-      # upload a release (we just want the artifact).
+      # upload a release itself (we publish it ourselves in the next step).
       - name: Build installer
         run: |
           pnpm exec tsc
           pnpm exec vite build
           pnpm exec electron-builder --win --publish never
 
-      - name: Upload installer
+      # Also upload as a workflow artifact (backup; requires GitHub login to download).
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: PackVid-Windows-Installer
           path: release/**/*.exe
           if-no-files-found: error
+
+      # Publish the .exe to a rolling GitHub Release so testers get a stable,
+      # no-login download link. The release is recreated each run so the tag
+      # always points at the newest build.
+      - name: Publish to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="windows-test-build"
+          exe=$(find release -name '*.exe' | head -n1)
+          echo "Publishing: $exe"
+          gh release delete "$tag" --cleanup-tag --yes || true
+          gh release create "$tag" "$exe" \
+            --title "PackVid — Windows test build" \
+            --notes "Latest automated Windows test build from main. Unsigned: on SmartScreen click **More info → Run anyway**." \
+            --prerelease
