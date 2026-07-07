@@ -1,0 +1,45 @@
+name: Build Windows Installer
+
+# Manual trigger — run from the Actions tab when you want a test build.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      # Installs deps and runs the root `postinstall` (electron-rebuild),
+      # which compiles better-sqlite3 against Electron's ABI on Windows.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Compile TypeScript + bundle renderer/main, then package the NSIS
+      # installer. --publish never keeps electron-builder from trying to
+      # upload a release (we just want the artifact).
+      - name: Build installer
+        run: |
+          pnpm exec tsc
+          pnpm exec vite build
+          pnpm exec electron-builder --win --publish never
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PackVid-Windows-Installer
+          path: release/**/*.exe
+          if-no-files-found: error
